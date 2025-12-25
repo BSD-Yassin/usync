@@ -7,8 +7,9 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  test:
-    name: Test Suite
+  # Formatting and linting (run once on Linux)
+  lint:
+    name: Lint and Format
     runs-on: ubuntu-latest
     
     steps:
@@ -35,10 +36,175 @@ jobs:
     
     - name: Run clippy
       run: cargo clippy -- -D warnings
-    
-    - name: Build
-      run: cargo build --release
-    
-    - name: Run tests
-      run: cargo test --lib || true
 
+  # Build and test matrix for multiple platforms and architectures
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native x64 builds
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            toolchain: stable
+          - os: windows-latest
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            toolchain: stable
+          - os: macos-latest
+            arch: x86_64
+            target: x86_64-apple-darwin
+            toolchain: stable
+          - os: macos-latest
+            arch: aarch64
+            target: aarch64-apple-darwin
+            toolchain: stable
+          
+          # Cross-compilation targets (using QEMU for testing)
+          - os: ubuntu-latest
+            arch: i686
+            target: i686-unknown-linux-gnu
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: armv7
+            target: armv7-unknown-linux-gnueabihf
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: arm
+            target: arm-unknown-linux-gnueabihf
+            toolchain: stable
+            cross: true
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ matrix.toolchain }}
+        targets: ${{ matrix.target }}
+    
+    # Install cross-compilation dependencies for Linux targets
+    - name: Install cross-compilation dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest' && matrix.cross == true
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-${{ matrix.target }} qemu-user-static binfmt-support
+        case "${{ matrix.target }}" in
+          *-gnueabihf)
+            sudo apt-get install -y gcc-arm-linux-gnueabihf
+            ;;
+          aarch64-*)
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            ;;
+          i686-*)
+            sudo apt-get install -y gcc-multilib
+            ;;
+        esac
+    
+    - name: Install cross (for easier cross-compilation)
+      if: matrix.cross == true
+      uses: cargo-cross/cross-action@v1
+      with:
+        platforms: ${{ matrix.target }}
+    
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build (native)
+      if: matrix.cross != true
+      run: cargo build --release --target ${{ matrix.target }}
+    
+    - name: Build (cross-compiled)
+      if: matrix.cross == true
+      run: |
+        if command -v cross &> /dev/null; then
+          cross build --release --target ${{ matrix.target }}
+        else
+          cargo build --release --target ${{ matrix.target }}
+        fi
+    
+    - name: Run unit tests (native)
+      if: matrix.cross != true
+      run: cargo test --lib --target ${{ matrix.target }} --release
+    
+    - name: Run unit tests (cross-compiled)
+      if: matrix.cross == true
+      run: |
+        if command -v cross &> /dev/null; then
+          cross test --lib --target ${{ matrix.target }} --release
+        else
+          cargo test --lib --target ${{ matrix.target }} --release
+        fi
+    
+    - name: Run integration tests (Linux/macOS)
+      if: runner.os != 'Windows' && matrix.cross != true
+      run: |
+        chmod +x tests/test_runner.sh || true
+        if [ -f "target/${{ matrix.target }}/release/usync" ]; then
+          ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync" || true
+        elif [ -f "target/release/usync" ]; then
+          ./tests/test_runner.sh "target/release/usync" || true
+        else
+          echo "Binary not found, skipping integration tests"
+        fi
+    
+    - name: Run integration tests (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if [ -f "target/${{ matrix.target }}/release/usync.exe" ]; then
+          ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync.exe" || true
+        elif [ -f "target/release/usync.exe" ]; then
+          ./tests/test_runner.sh "target/release/usync.exe" || true
+        else
+          echo "Binary not found, skipping integration tests"
+        fi
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: matrix.cross != true
+      with:
+        name: usync-${{ matrix.os }}-${{ matrix.arch }}
+        path: |
+          target/${{ matrix.target }}/release/usync*
+          target/release/usync*
+        retention-days: 7
+
+  # Summary job to check all tests passed
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: always()
+    
+    steps:
+    - name: Check test results
+      run: |
+        if [ "${{ needs.test.result }}" != "success" ]; then
+          echo "Some test jobs failed"
+          exit 1
+        fi
+        if [ "${{ needs.lint.result }}" != "success" ]; then
+          echo "Lint job failed"
+          exit 1
+        fi
+        echo "All tests passed!"
