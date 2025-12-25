@@ -9,6 +9,9 @@ use crate::path::LocalPath;
 use crate::protocol::Path as ProtocolPath;
 use crate::remote;
 use crate::utils;
+use crate::backend::{create_backend, BackendInstance};
+use crate::backend::traits::Backend;
+use crate::backend::traits::CopyOptions;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -81,6 +84,248 @@ impl CopyStats {
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 pub fn copy(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+) -> Result<CopyStats, CopyError> {
+    copy_with_options(src, dst, verbose, ssh_opts, progress, use_ram, None, false)
+}
+
+pub fn copy_with_options(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+) -> Result<CopyStats, CopyError> {
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+        dry_run,
+        filters: None,
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts, checksum_algorithm)
+        }
+        _ => {
+            copy_legacy(src, dst, verbose, ssh_opts, progress, use_ram)
+        }
+    }
+}
+
+pub fn copy_with_options_and_filters(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+    filters: Option<std::sync::Arc<dyn crate::filters::Filter>>,
+) -> Result<CopyStats, CopyError> {
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+        dry_run,
+        filters,
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts, checksum_algorithm)
+        }
+        _ => {
+            copy_legacy(src, dst, verbose, ssh_opts, progress, use_ram)
+        }
+    }
+}
+
+fn copy_with_backends(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    src_backend: &BackendInstance,
+    dst_backend: &BackendInstance,
+    opts: &CopyOptions,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+) -> Result<CopyStats, CopyError> {
+    let src_str = match src {
+        ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+        ProtocolPath::Remote(remote) => remote.url.to_string(),
+    };
+
+    let dst_str = match dst {
+        ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+        ProtocolPath::Remote(remote) => remote.url.to_string(),
+    };
+
+    let src_is_dir = match src {
+        ProtocolPath::Local(local) => local.is_dir(),
+        ProtocolPath::Remote(_) => {
+            src_backend.as_backend().list(&src_str)
+                .map(|files| files.iter().any(|f| f.is_dir))
+                .unwrap_or(false)
+        }
+    };
+
+    if src_is_dir {
+        let stats = match dst_backend.as_backend().copy_directory(&src_str, &dst_str, opts) {
+            Ok(stats) => stats,
+            Err(e) => {
+                return Err(CopyError::IoError {
+                    message: format!("Backend directory copy failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        };
+        
+        if let Some(algorithm) = checksum_algorithm {
+            if opts.verbose {
+                println!("Verifying checksums for directory...");
+            }
+            verify_directory_checksums(src_backend.as_backend(), dst_backend.as_backend(), &src_str, &dst_str, algorithm, opts.verbose)?;
+        }
+        
+        Ok(stats)
+    } else {
+        let bytes = match src_backend.as_backend().copy_file(&src_str, &dst_str, opts) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return Err(CopyError::IoError {
+                    message: format!("Backend copy failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        };
+        
+        if let Some(algorithm) = checksum_algorithm {
+            if opts.verbose {
+                println!("Verifying checksum using {:?}...", algorithm);
+            }
+            
+            let src_checksum = src_backend.as_backend().checksum(&src_str, algorithm)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Failed to compute source checksum: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })?;
+            
+            let dst_checksum = dst_backend.as_backend().checksum(&dst_str, algorithm)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Failed to compute destination checksum: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })?;
+            
+            if src_checksum != dst_checksum {
+                return Err(CopyError::IoError {
+                    message: format!("Checksum mismatch: expected {}, got {}", src_checksum, dst_checksum),
+                    error: io::Error::new(io::ErrorKind::InvalidData, "Checksum verification failed"),
+                });
+            }
+            
+            if opts.verbose {
+                println!("✓ Checksum verified: {}", src_checksum);
+            }
+        }
+        
+        let mut stats = if opts.verbose || opts.progress {
+            CopyStats::new()
+        } else {
+            CopyStats::new_minimal()
+        };
+        if stats.start_time.is_some() {
+            stats.files_copied = 1;
+            stats.bytes_copied = bytes;
+        }
+        Ok(stats)
+    }
+}
+
+fn verify_directory_checksums(
+    src_backend: &dyn Backend,
+    dst_backend: &dyn Backend,
+    src: &str,
+    dst: &str,
+    algorithm: crate::backend::traits::ChecksumAlgorithm,
+    verbose: bool,
+) -> Result<(), CopyError> {
+    use crate::backend::traits::Backend;
+    
+    let src_files = src_backend.list(src)
+        .map_err(|e| CopyError::IoError {
+            message: format!("Failed to list source directory: {}", e),
+            error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+        })?;
+    
+    let mut failed = Vec::new();
+    
+    for src_file in src_files {
+        if src_file.is_dir {
+            continue;
+        }
+        
+        let rel_path = src_file.path.strip_prefix(src)
+            .unwrap_or(&src_file.path)
+            .trim_start_matches('/');
+        
+        let dst_path = if dst.ends_with('/') {
+            format!("{}{}", dst, rel_path)
+        } else {
+            format!("{}/{}", dst, rel_path)
+        };
+        
+        match (src_backend.checksum(&src_file.path, algorithm),
+               dst_backend.checksum(&dst_path, algorithm)) {
+            (Ok(src_hash), Ok(dst_hash)) if src_hash == dst_hash => {
+                if verbose {
+                    println!("✓ {}: {}", rel_path, src_hash);
+                }
+            }
+            (Ok(src_hash), Ok(dst_hash)) => {
+                failed.push((rel_path.to_string(), src_hash, dst_hash));
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                return Err(CopyError::IoError {
+                    message: format!("Checksum computation failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        }
+    }
+    
+    if !failed.is_empty() {
+        eprintln!("Checksum verification failed for {} files:", failed.len());
+            let failed_count = failed.len();
+            for (path, expected, actual) in &failed {
+                eprintln!("  {}: expected {}, got {}", path, expected, actual);
+            }
+            return Err(CopyError::IoError {
+                message: format!("Checksum verification failed for {} files", failed_count),
+                error: io::Error::new(io::ErrorKind::InvalidData, "Checksum mismatch"),
+            });
+    }
+    
+    if verbose {
+        println!("✓ All files verified successfully");
+    }
+    
+    Ok(())
+}
+
+fn copy_legacy(
     src: &ProtocolPath,
     dst: &ProtocolPath,
     verbose: bool,
@@ -883,6 +1128,118 @@ fn copy_directory_recursive_impl(
     Ok(())
 }
 
+pub fn sync_with_options(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+) -> Result<crate::operations::sync::SyncStats, CopyError> {
+    use crate::operations::sync::{SyncOperation, SyncMode};
+    use crate::backend::traits::CopyOptions;
+    
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+        dry_run,
+        filters: None,
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            let src_str = match src {
+                ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+                ProtocolPath::Remote(remote) => remote.url.to_string(),
+            };
+
+            let dst_str = match dst {
+                ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+                ProtocolPath::Remote(remote) => remote.url.to_string(),
+            };
+
+            let (src_backend_box, dst_backend_box) = match (create_backend(src), create_backend(dst)) {
+                (Ok(src_b), Ok(dst_b)) => {
+                    let src_box: Box<dyn Backend> = match src_b {
+                        BackendInstance::Local(_) => Box::new(crate::backend::local::LocalBackend::new()),
+                        BackendInstance::Ssh(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::ssh::SshBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for SSH".to_string()));
+                            }
+                        }
+                        BackendInstance::S3(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::s3::S3Backend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for S3".to_string()));
+                            }
+                        }
+                        BackendInstance::Http(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::http::HttpBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for HTTP".to_string()));
+                            }
+                        }
+                    };
+                    
+                    let dst_box: Box<dyn Backend> = match dst_b {
+                        BackendInstance::Local(_) => Box::new(crate::backend::local::LocalBackend::new()),
+                        BackendInstance::Ssh(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::ssh::SshBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for SSH".to_string()));
+                            }
+                        }
+                        BackendInstance::S3(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::s3::S3Backend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for S3".to_string()));
+                            }
+                        }
+                        BackendInstance::Http(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::http::HttpBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for HTTP".to_string()));
+                            }
+                        }
+                    };
+                    (src_box, dst_box)
+                }
+                _ => return Err(CopyError::UnsupportedProtocol(
+                    "Sync requires backend support for both source and destination".to_string(),
+                ))
+            };
+
+            let sync_op = SyncOperation::new(
+                src_backend_box,
+                dst_backend_box,
+                SyncMode::OneWay,
+                opts,
+            );
+
+            sync_op.sync(&src_str, &dst_str)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Sync failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })
+        }
+        _ => Err(CopyError::UnsupportedProtocol(
+            "Sync requires backend support for both source and destination".to_string(),
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub enum CopyError {
     SourceNotFound(String),
@@ -890,6 +1247,7 @@ pub enum CopyError {
     IoError { message: String, error: io::Error },
     RemoteError(crate::remote::RemoteCopyError),
     UnsupportedProtocol(String),
+    Other(String),
 }
 
 impl std::fmt::Display for CopyError {
@@ -909,6 +1267,12 @@ impl std::fmt::Display for CopyError {
             }
             CopyError::UnsupportedProtocol(msg) => {
                 write!(f, "Unsupported protocol: {}\n\nSupported protocols: ssh://, sftp://, http://, https://, s3://\nFor more information, see: https://github.com/yassinbousaadi/usync", msg)
+            }
+            CopyError::Other(msg) => {
+                write!(f, "{}", msg)
+            }
+            CopyError::Other(msg) => {
+                write!(f, "{}", msg)
             }
         }
     }

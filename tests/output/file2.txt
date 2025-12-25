@@ -1,1 +1,1 @@
-test file 2
+Test content for file2

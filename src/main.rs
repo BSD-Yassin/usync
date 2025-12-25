@@ -1,4 +1,7 @@
+mod backend;
 mod copy;
+mod filters;
+mod operations;
 mod path;
 mod protocol;
 mod remote;
@@ -6,9 +9,15 @@ mod utils;
 
 use clap::Parser;
 
-use copy::copy;
+use copy as copy_module;
 use protocol::parse_path;
+use operations::sync::SyncStats;
 use std::fs;
+
+enum SyncResult {
+    Copy(copy_module::CopyStats),
+    Sync(SyncStats),
+}
 
 #[cfg(feature = "color")]
 use colored::*;
@@ -130,6 +139,34 @@ struct Args {
     /// Move files instead of copying (removes source after successful copy)
     #[arg(short = 'm', long = "move")]
     move_files: bool,
+
+    /// Verify file integrity using checksums after copy (MD5, SHA1, or SHA256)
+    #[arg(long = "checksum", value_name = "ALGORITHM")]
+    checksum: Option<String>,
+
+    /// Dry-run mode: show what would be copied without actually copying
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Sync mode: only copy changed/new files (one-way sync)
+    #[arg(long = "sync")]
+    sync: bool,
+
+    /// Include files matching pattern (glob, can be used multiple times)
+    #[arg(long = "include", value_name = "PATTERN")]
+    include: Vec<String>,
+
+    /// Exclude files matching pattern (glob, can be used multiple times)
+    #[arg(long = "exclude", value_name = "PATTERN")]
+    exclude: Vec<String>,
+
+    /// Minimum file size in bytes
+    #[arg(long = "min-size", value_name = "BYTES")]
+    min_size: Option<u64>,
+
+    /// Maximum file size in bytes
+    #[arg(long = "max-size", value_name = "BYTES")]
+    max_size: Option<u64>,
 }
 
 fn main() {
@@ -223,10 +260,32 @@ fn main() {
             .unwrap_or_default()
     };
 
+    let checksum_algorithm = args.checksum.as_ref().and_then(|s| {
+        match s.to_lowercase().as_str() {
+            "md5" => Some(crate::backend::traits::ChecksumAlgorithm::Md5),
+            "sha1" => Some(crate::backend::traits::ChecksumAlgorithm::Sha1),
+            "sha256" => Some(crate::backend::traits::ChecksumAlgorithm::Sha256),
+            _ => {
+                eprintln!("Invalid checksum algorithm: {}. Use md5, sha1, or sha256", s);
+                None
+            }
+        }
+    });
+
+    let dry_run = args.dry_run || std::env::var("USYNC_DRY_RUN")
+        .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(false);
+
     let env_progress = std::env::var("USYNC_PROGRESS")
         .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
         .unwrap_or(false);
     let show_progress = args.progress || env_progress;
+
+    if dry_run {
+        println!("[DRY RUN] Would {} {} to {}", 
+            if args.move_files { "move" } else { "copy" },
+            src_str, dst_str);
+    }
 
     if verbose {
         if args.move_files {
@@ -236,15 +295,33 @@ fn main() {
         }
     }
 
-    match copy(
-        &src_path,
-        &dst_path,
-        verbose,
-        &ssh_opts,
-        show_progress,
-        args.use_ram,
-    ) {
-        Ok(stats) => {
+    let result: Result<SyncResult, copy_module::CopyError> = if args.sync {
+        copy_module::sync_with_options(
+            &src_path,
+            &dst_path,
+            verbose,
+            &ssh_opts,
+            show_progress,
+            args.use_ram,
+            checksum_algorithm,
+            dry_run,
+        ).map(|stats| SyncResult::Sync(stats))
+    } else {
+        copy_module::copy_with_options_and_filters(
+            &src_path,
+            &dst_path,
+            verbose,
+            &ssh_opts,
+            show_progress,
+            args.use_ram,
+            checksum_algorithm,
+            dry_run,
+            filters,
+        ).map(|stats| SyncResult::Copy(stats))
+    };
+
+    match result {
+        Ok(SyncResult::Copy(_)) | Ok(SyncResult::Sync(_)) => {
             if args.move_files {
                 match delete_source(&src_path, verbose) {
                     Ok(()) => {
@@ -301,7 +378,18 @@ fn main() {
                 println!("Successfully copied {} to {}", src_str, dst_str);
             }
             if verbose || show_progress {
-                stats.print_summary(verbose);
+                match &result {
+                    Ok(SyncResult::Copy(stats)) => stats.print_summary(verbose),
+                    Ok(SyncResult::Sync(stats)) => {
+                        println!("\n=== Sync Summary ===");
+                        println!("Files copied: {}", stats.files_copied);
+                        println!("Bytes copied: {} ({:.2} MB)", 
+                            stats.bytes_copied,
+                            stats.bytes_copied as f64 / 1_048_576.0);
+                        println!("Files deleted: {}", stats.files_deleted);
+                    }
+                    _ => {}
+                }
             }
         }
         Err(e) => {

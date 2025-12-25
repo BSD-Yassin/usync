@@ -13,6 +13,11 @@ colored = { version = "2.1", optional = true }
 rayon = { version = "1.8", optional = true }
 aws-sdk-s3 = { version = "1", optional = true }
 tokio = { version = "1", optional = true, features = ["full"] }
+md5 = "0.7"
+sha1 = "0.10"
+sha2 = "0.10"
+digest = "0.10"
+glob = "0.3"
 [features]
 default = []
 progress = ["indicatif"]
@@ -23,3 +28,7 @@ s3-sdk = ["aws-sdk-s3", "tokio"]
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[lib]
+name = "usync"
+path = "src/lib.rs"
