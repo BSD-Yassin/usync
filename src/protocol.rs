@@ -205,7 +205,10 @@ mod tests {
         assert_eq!(Protocol::from_str("sftp"), Protocol::Sftp);
         assert_eq!(Protocol::from_str("HTTP"), Protocol::Http);
         assert_eq!(Protocol::from_str("https"), Protocol::Https);
-        assert!(matches!(Protocol::from_str("unknown"), Protocol::Unknown(_)));
+        assert!(matches!(
+            Protocol::from_str("unknown"),
+            Protocol::Unknown(_)
+        ));
     }
 
     #[test]

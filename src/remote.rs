@@ -14,12 +14,8 @@ pub fn copy_remote(
         (Protocol::Ssh | Protocol::Sftp, Protocol::Ssh | Protocol::Sftp) => {
             copy_ssh_to_ssh(src, dst, verbose, ssh_opts, progress)
         }
-        (Protocol::Ssh | Protocol::Sftp, _) => {
-            copy_from_ssh(src, dst, verbose)
-        }
-        (_, Protocol::Ssh | Protocol::Sftp) => {
-            copy_to_ssh(src, dst, verbose)
-        }
+        (Protocol::Ssh | Protocol::Sftp, _) => copy_from_ssh(src, dst, verbose),
+        (_, Protocol::Ssh | Protocol::Sftp) => copy_to_ssh(src, dst, verbose),
         _ => Err(RemoteCopyError::UnsupportedProtocol {
             src: src.protocol.to_string(),
             dst: dst.protocol.to_string(),
@@ -34,35 +30,38 @@ pub fn copy_from_ssh_to_file(
     ssh_opts: &[String],
     progress: bool,
 ) -> Result<(), RemoteCopyError> {
-    let host = src.url.host_str().ok_or_else(|| RemoteCopyError::ConnectionError(
-        "No host specified in SSH URL".to_string()
-    ))?;
-    
+    let host = src.url.host_str().ok_or_else(|| {
+        RemoteCopyError::ConnectionError("No host specified in SSH URL".to_string())
+    })?;
+
     let port = src.url.port().unwrap_or(22);
     let username = src.url.username();
     let remote_path = src.path.as_str();
 
     if verbose {
         println!("Connecting to SSH: {}@{}:{}", username, host, port);
-        println!("Copying from remote: {} to local: {}", remote_path, dst_path.display());
+        println!(
+            "Copying from remote: {} to local: {}",
+            remote_path,
+            dst_path.display()
+        );
     }
 
     if let Some(parent) = dst_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| RemoteCopyError::IoError {
-                message: format!("Failed to create directory: {}", parent.display()),
-                error: e.to_string(),
-            })?;
+        std::fs::create_dir_all(parent).map_err(|e| RemoteCopyError::IoError {
+            message: format!("Failed to create directory: {}", parent.display()),
+            error: e.to_string(),
+        })?;
     }
 
     let remote_spec = format!("{}@{}:{}", username, host, remote_path);
 
     let mut cmd = Command::new("scp");
-    
+
     if port != 22 {
         cmd.arg("-P").arg(port.to_string());
     }
-    
+
     if progress {
         cmd.arg("-v");
     } else if !verbose {
@@ -72,15 +71,13 @@ pub fn copy_from_ssh_to_file(
     for opt in ssh_opts {
         cmd.arg("-o").arg(opt);
     }
-    
-    cmd.arg(&remote_spec)
-       .arg(dst_path);
 
-    let status = cmd.status()
-        .map_err(|e| RemoteCopyError::IoError {
-            message: "Failed to execute scp".to_string(),
-            error: e.to_string(),
-        })?;
+    cmd.arg(&remote_spec).arg(dst_path);
+
+    let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+        message: "Failed to execute scp".to_string(),
+        error: e.to_string(),
+    })?;
 
     if status.success() {
         if verbose {
@@ -101,11 +98,15 @@ pub fn copy_from_ssh(
     verbose: bool,
 ) -> Result<(), RemoteCopyError> {
     if verbose {
-        println!("Connecting to SSH: {}://{}", src.protocol, src.url.host_str().unwrap_or(""));
+        println!(
+            "Connecting to SSH: {}://{}",
+            src.protocol,
+            src.url.host_str().unwrap_or("")
+        );
     }
 
     Err(RemoteCopyError::NotImplemented(
-        "Use copy_from_ssh_to_file for file operations".to_string()
+        "Use copy_from_ssh_to_file for file operations".to_string(),
     ))
 }
 
@@ -116,27 +117,31 @@ pub fn copy_file_to_ssh(
     ssh_opts: &[String],
     progress: bool,
 ) -> Result<(), RemoteCopyError> {
-    let host = dst.url.host_str().ok_or_else(|| RemoteCopyError::ConnectionError(
-        "No host specified in SSH URL".to_string()
-    ))?;
-    
+    let host = dst.url.host_str().ok_or_else(|| {
+        RemoteCopyError::ConnectionError("No host specified in SSH URL".to_string())
+    })?;
+
     let port = dst.url.port().unwrap_or(22);
     let username = dst.url.username();
     let remote_path = dst.path.as_str();
 
     if verbose {
         println!("Connecting to SSH: {}@{}:{}", username, host, port);
-        println!("Copying from local: {} to remote: {}", src_path.display(), remote_path);
+        println!(
+            "Copying from local: {} to remote: {}",
+            src_path.display(),
+            remote_path
+        );
     }
 
     let remote_spec = format!("{}@{}:{}", username, host, remote_path);
 
     let mut cmd = Command::new("scp");
-    
+
     if port != 22 {
         cmd.arg("-P").arg(port.to_string());
     }
-    
+
     if progress {
         cmd.arg("-v");
     } else if !verbose {
@@ -146,15 +151,13 @@ pub fn copy_file_to_ssh(
     for opt in ssh_opts {
         cmd.arg("-o").arg(opt);
     }
-    
-    cmd.arg(src_path)
-       .arg(&remote_spec);
 
-    let status = cmd.status()
-        .map_err(|e| RemoteCopyError::IoError {
-            message: "Failed to execute scp".to_string(),
-            error: e.to_string(),
-        })?;
+    cmd.arg(src_path).arg(&remote_spec);
+
+    let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+        message: "Failed to execute scp".to_string(),
+        error: e.to_string(),
+    })?;
 
     if status.success() {
         if verbose {
@@ -169,18 +172,21 @@ pub fn copy_file_to_ssh(
     }
 }
 
-
 pub fn copy_to_ssh(
     _src: &RemotePath,
     dst: &RemotePath,
     verbose: bool,
 ) -> Result<(), RemoteCopyError> {
     if verbose {
-        println!("Connecting to SSH: {}://{}", dst.protocol, dst.url.host_str().unwrap_or(""));
+        println!(
+            "Connecting to SSH: {}://{}",
+            dst.protocol,
+            dst.url.host_str().unwrap_or("")
+        );
     }
 
     Err(RemoteCopyError::NotImplemented(
-        "Use copy_file_to_ssh for file operations".to_string()
+        "Use copy_file_to_ssh for file operations".to_string(),
     ))
 }
 
@@ -252,19 +258,17 @@ pub fn copy_from_http_to_file(
     }
 
     if let Some(parent) = dst_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| RemoteCopyError::IoError {
-                message: format!("Failed to create directory: {}", parent.display()),
-                error: e.to_string(),
-            })?;
+        std::fs::create_dir_all(parent).map_err(|e| RemoteCopyError::IoError {
+            message: format!("Failed to create directory: {}", parent.display()),
+            error: e.to_string(),
+        })?;
     }
 
     if let Ok(mut cmd) = try_curl(&url, dst_path, verbose, progress) {
-        let status = cmd.status()
-            .map_err(|e| RemoteCopyError::IoError {
-                message: "Failed to execute curl".to_string(),
-                error: e.to_string(),
-            })?;
+        let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+            message: "Failed to execute curl".to_string(),
+            error: e.to_string(),
+        })?;
 
         if status.success() {
             if verbose {
@@ -280,11 +284,10 @@ pub fn copy_from_http_to_file(
     }
 
     if let Ok(mut cmd) = try_wget(&url, dst_path, verbose, progress) {
-        let status = cmd.status()
-            .map_err(|e| RemoteCopyError::IoError {
-                message: "Failed to execute wget".to_string(),
-                error: e.to_string(),
-            })?;
+        let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+            message: "Failed to execute wget".to_string(),
+            error: e.to_string(),
+        })?;
 
         if status.success() {
             if verbose {
@@ -306,20 +309,14 @@ pub fn copy_from_http_to_file(
 }
 
 fn try_curl(url: &str, dst_path: &Path, verbose: bool, progress: bool) -> Result<Command, ()> {
-    let check = Command::new("curl")
-        .arg("--version")
-        .output();
-    
+    let check = Command::new("curl").arg("--version").output();
+
     if check.is_err() {
         return Err(());
     }
 
     let mut cmd = Command::new("curl");
-    cmd.arg("-L")
-       .arg("-f")
-       .arg("-o")
-       .arg(dst_path)
-       .arg(url);
+    cmd.arg("-L").arg("-f").arg("-o").arg(dst_path).arg(url);
 
     if progress {
         cmd.arg("--progress-bar");
@@ -331,18 +328,14 @@ fn try_curl(url: &str, dst_path: &Path, verbose: bool, progress: bool) -> Result
 }
 
 fn try_wget(url: &str, dst_path: &Path, verbose: bool, progress: bool) -> Result<Command, ()> {
-    let check = Command::new("wget")
-        .arg("--version")
-        .output();
-    
+    let check = Command::new("wget").arg("--version").output();
+
     if check.is_err() {
         return Err(());
     }
 
     let mut cmd = Command::new("wget");
-    cmd.arg("-O")
-       .arg(dst_path)
-       .arg(url);
+    cmd.arg("-O").arg(dst_path).arg(url);
 
     if progress {
         cmd.arg("--progress=bar");

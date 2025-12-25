@@ -1,13 +1,13 @@
-mod path;
 mod copy;
+mod path;
 mod protocol;
 mod remote;
 mod utils;
 
 use clap::Parser;
 
-use protocol::parse_path;
 use copy::copy;
+use protocol::parse_path;
 use std::fs;
 
 #[cfg(feature = "color")]
@@ -132,10 +132,9 @@ struct Args {
     move_files: bool,
 }
 
-
 fn main() {
     let args = Args::parse();
-    
+
     let env_verbose = std::env::var("USYNC_VERBOSE")
         .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
         .unwrap_or(false);
@@ -167,16 +166,24 @@ fn main() {
         protocol::Path::Local(local_path) => {
             if !local_path.exists() {
                 #[cfg(feature = "color")]
-                eprintln!("{}: {}", "Error".red().bold(), format!("Source path does not exist: {}", local_path.to_string_lossy()));
+                eprintln!(
+                    "{}: {}",
+                    "Error".red().bold(),
+                    format!(
+                        "Source path does not exist: {}",
+                        local_path.to_string_lossy()
+                    )
+                );
                 #[cfg(not(feature = "color"))]
-                eprintln!("Error: Source path does not exist: {}", local_path.to_string_lossy());
+                eprintln!(
+                    "Error: Source path does not exist: {}",
+                    local_path.to_string_lossy()
+                );
                 std::process::exit(1);
             }
             local_path.is_dir()
         }
-        protocol::Path::Remote(_) => {
-            false
-        }
+        protocol::Path::Remote(_) => false,
     };
 
     if is_dir && !args.recursive {
@@ -187,7 +194,7 @@ fn main() {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
-        
+
         let trimmed = input.trim().to_lowercase();
         if trimmed != "y" && trimmed != "yes" {
             if verbose {
@@ -226,7 +233,14 @@ fn main() {
         }
     }
 
-    match copy(&src_path, &dst_path, verbose, &ssh_opts, show_progress, args.use_ram) {
+    match copy(
+        &src_path,
+        &dst_path,
+        verbose,
+        &ssh_opts,
+        show_progress,
+        args.use_ram,
+    ) {
         Ok(stats) => {
             // If move flag is set, delete source files after successful copy
             if args.move_files {
@@ -234,7 +248,15 @@ fn main() {
                     Ok(()) => {
                         if verbose {
                             #[cfg(feature = "color")]
-                            println!("{} {} and removed source", "✓".green().bold(), if args.use_ram { "Moved via RAM" } else { "Moved" });
+                            println!(
+                                "{} {} and removed source",
+                                "✓".green().bold(),
+                                if args.use_ram {
+                                    "Moved via RAM"
+                                } else {
+                                    "Moved"
+                                }
+                            );
                             #[cfg(not(feature = "color"))]
                             println!("✓ Moved and removed source");
                         } else {
@@ -246,7 +268,11 @@ fn main() {
                     }
                     Err(e) => {
                         #[cfg(feature = "color")]
-                        eprintln!("{}: Copy succeeded but failed to remove source: {}", "Warning".yellow().bold(), e);
+                        eprintln!(
+                            "{}: Copy succeeded but failed to remove source: {}",
+                            "Warning".yellow().bold(),
+                            e
+                        );
                         #[cfg(not(feature = "color"))]
                         eprintln!("Warning: Copy succeeded but failed to remove source: {}", e);
                     }
@@ -254,12 +280,22 @@ fn main() {
             } else {
                 if verbose {
                     #[cfg(feature = "color")]
-                    println!("{} {} to {}", "✓".green().bold(), "Successfully copied".green(), format!("{} to {}", src_str, dst_str));
+                    println!(
+                        "{} {} to {}",
+                        "✓".green().bold(),
+                        "Successfully copied".green(),
+                        format!("{} to {}", src_str, dst_str)
+                    );
                     #[cfg(not(feature = "color"))]
                     println!("✓ Successfully copied {} to {}", src_str, dst_str);
                 } else {
                     #[cfg(feature = "color")]
-                    println!("{} {} to {}", "Successfully copied".green(), src_str, dst_str);
+                    println!(
+                        "{} {} to {}",
+                        "Successfully copied".green(),
+                        src_str,
+                        dst_str
+                    );
                     #[cfg(not(feature = "color"))]
                     println!("Successfully copied {} to {}", src_str, dst_str);
                 }
@@ -268,9 +304,27 @@ fn main() {
         }
         Err(e) => {
             #[cfg(feature = "color")]
-            eprintln!("{}: {}", if args.move_files { "Error moving" } else { "Error copying" }.red().bold(), e);
+            eprintln!(
+                "{}: {}",
+                if args.move_files {
+                    "Error moving"
+                } else {
+                    "Error copying"
+                }
+                .red()
+                .bold(),
+                e
+            );
             #[cfg(not(feature = "color"))]
-            eprintln!("{}: {}", if args.move_files { "Error moving" } else { "Error copying" }, e);
+            eprintln!(
+                "{}: {}",
+                if args.move_files {
+                    "Error moving"
+                } else {
+                    "Error copying"
+                },
+                e
+            );
             std::process::exit(1);
         }
     }
@@ -285,20 +339,23 @@ fn delete_source(path: &protocol::Path, verbose: bool) -> Result<(), String> {
                 if verbose {
                     println!("Removing directory and all contents: {}", path.display());
                 }
-                fs::remove_dir_all(path).map_err(|e| format!("Failed to remove directory {}: {}", path.display(), e))?;
+                fs::remove_dir_all(path)
+                    .map_err(|e| format!("Failed to remove directory {}: {}", path.display(), e))?;
                 if verbose {
                     println!("Removed directory: {}", path.display());
                 }
             } else {
-                fs::remove_file(path).map_err(|e| format!("Failed to remove file {}: {}", path.display(), e))?;
+                fs::remove_file(path)
+                    .map_err(|e| format!("Failed to remove file {}: {}", path.display(), e))?;
                 if verbose {
                     println!("Removed file: {}", path.display());
                 }
             }
             Ok(())
         }
-        protocol::Path::Remote(_) => {
-            Err("Cannot remove remote files. Move operation only supported for local files.".to_string())
-        }
+        protocol::Path::Remote(_) => Err(
+            "Cannot remove remote files. Move operation only supported for local files."
+                .to_string(),
+        ),
     }
 }

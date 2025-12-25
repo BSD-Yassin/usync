@@ -6,7 +6,6 @@ pub struct LocalPath {
 }
 
 impl LocalPath {
-
     pub fn parse(path_str: &str) -> Result<Self, PathError> {
         if path_str.contains("://") {
             let protocol = path_str.split("://").next().unwrap();
@@ -24,7 +23,7 @@ impl LocalPath {
         }
 
         let path = PathBuf::from(path_str);
-        
+
         Ok(LocalPath { path })
     }
 
@@ -59,7 +58,11 @@ impl std::fmt::Display for PathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PathError::ProtocolNotAllowed(protocol) => {
-                write!(f, "Protocol '{}' is not allowed. Only local paths are supported.", protocol)
+                write!(
+                    f,
+                    "Protocol '{}' is not allowed. Only local paths are supported.",
+                    protocol
+                )
             }
             PathError::RemotePathNotAllowed => {
                 write!(f, "Remote paths (e.g., user@host:path) are not allowed. Only local paths are supported.")

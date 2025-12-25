@@ -1,8 +1,8 @@
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::Instant;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::path::LocalPath;
 use crate::protocol::Path as ProtocolPath;
@@ -39,16 +39,21 @@ impl CopyStats {
             } else {
                 0.0
             };
-            
+
             if verbose {
                 println!("\n=== Copy Summary ===");
                 println!("Files copied: {}", self.files_copied);
-                println!("Bytes transferred: {} ({:.2} MB)", self.bytes_copied, self.bytes_copied as f64 / 1_048_576.0);
+                println!(
+                    "Bytes transferred: {} ({:.2} MB)",
+                    self.bytes_copied,
+                    self.bytes_copied as f64 / 1_048_576.0
+                );
                 println!("Files skipped: {}", self.files_skipped);
                 println!("Time taken: {:.2}s", duration.as_secs_f64());
                 println!("Average speed: {:.2} MB/s", speed);
             } else {
-                println!("\nSummary: {} files, {:.2} MB, {:.2}s, {:.2} MB/s", 
+                println!(
+                    "\nSummary: {} files, {:.2} MB, {:.2}s, {:.2} MB/s",
                     self.files_copied,
                     self.bytes_copied as f64 / 1_048_576.0,
                     duration.as_secs_f64(),
@@ -60,11 +65,18 @@ impl CopyStats {
 }
 
 #[cfg(feature = "progress")]
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-pub fn copy(src: &ProtocolPath, dst: &ProtocolPath, verbose: bool, ssh_opts: &[String], progress: bool, use_ram: bool) -> Result<CopyStats, CopyError> {
+pub fn copy(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+) -> Result<CopyStats, CopyError> {
     let mut stats = CopyStats::new();
-    
+
     let result = match (src, dst) {
         (ProtocolPath::Local(src_local), ProtocolPath::Local(dst_local)) => {
             copy_local_with_stats(src_local, dst_local, verbose, progress, use_ram, &mut stats)
@@ -81,11 +93,18 @@ pub fn copy(src: &ProtocolPath, dst: &ProtocolPath, verbose: bool, ssh_opts: &[S
             copy_from_local_to_remote(src_local, dst_remote, verbose, ssh_opts, progress)
         }
     };
-    
+
     result.map(|_| stats)
 }
 
-fn copy_local_with_stats(src: &LocalPath, dst: &LocalPath, verbose: bool, progress: bool, use_ram: bool, stats: &mut CopyStats) -> Result<(), CopyError> {
+fn copy_local_with_stats(
+    src: &LocalPath,
+    dst: &LocalPath,
+    verbose: bool,
+    progress: bool,
+    use_ram: bool,
+    stats: &mut CopyStats,
+) -> Result<(), CopyError> {
     if !src.exists() {
         return Err(CopyError::SourceNotFound(src.to_string_lossy().to_string()));
     }
@@ -147,7 +166,7 @@ fn copy_from_local_to_remote(
                     .map_err(|e| CopyError::RemoteError(e))
             } else {
                 Err(CopyError::UnsupportedProtocol(
-                    "Directory copying to remote is not yet implemented".to_string()
+                    "Directory copying to remote is not yet implemented".to_string(),
                 ))
             }
         }
@@ -159,12 +178,23 @@ fn copy_from_local_to_remote(
 }
 
 // Legacy function for backward compatibility
-pub fn copy_local(src: &LocalPath, dst: &LocalPath, verbose: bool, progress: bool) -> Result<(), CopyError> {
+pub fn copy_local(
+    src: &LocalPath,
+    dst: &LocalPath,
+    verbose: bool,
+    progress: bool,
+) -> Result<(), CopyError> {
     let mut stats = CopyStats::new();
     copy_local_with_stats(src, dst, verbose, progress, false, &mut stats)
 }
 
-fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: bool) -> Result<u64, CopyError> {
+fn copy_file(
+    src: &Path,
+    dst: &Path,
+    verbose: bool,
+    progress: bool,
+    use_ram: bool,
+) -> Result<u64, CopyError> {
     let final_dst = if dst.is_dir() {
         if let Some(file_name) = src.file_name() {
             dst.join(file_name)
@@ -182,14 +212,15 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
             println!("Creating directory: {}", parent.display());
         }
         fs::create_dir_all(parent).map_err(|e| CopyError::IoError {
-            message: format!("Failed to create destination directory: {}", parent.display()),
+            message: format!(
+                "Failed to create destination directory: {}",
+                parent.display()
+            ),
             error: e,
         })?;
     }
 
-    let src_size = fs::metadata(src)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let src_size = fs::metadata(src).map(|m| m.len()).unwrap_or(0);
 
     #[cfg(feature = "progress")]
     let pb: Option<ProgressBar> = if progress {
@@ -223,7 +254,7 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
                 true
             }
         };
-        
+
         if show_simple {
             print!("Copying {} ({} bytes)... ", src.display(), src_size);
             use std::io::Write;
@@ -232,13 +263,17 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
     }
 
     let start = Instant::now();
-    
+
     // Choose copy method based on flags
     let result = if use_ram {
         // Check file size before using RAM (warn if very large)
-        if src_size > 100 * 1024 * 1024 { // 100MB
+        if src_size > 100 * 1024 * 1024 {
+            // 100MB
             if verbose {
-                eprintln!("Warning: File is large ({} MB), RAM copy may use significant memory", src_size as f64 / 1_048_576.0);
+                eprintln!(
+                    "Warning: File is large ({} MB), RAM copy may use significant memory",
+                    src_size as f64 / 1_048_576.0
+                );
             }
         }
         utils::copy_file_via_ram(src, &final_dst)
@@ -274,7 +309,7 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
                     println!("✓");
                 }
             }
-            
+
             if verbose {
                 let duration = start.elapsed();
                 let speed = if duration.as_secs_f64() > 0.0 {
@@ -282,7 +317,12 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
                 } else {
                     0.0
                 };
-                println!("Copied {} bytes in {:.2}s ({:.2} MB/s)", bytes_copied, duration.as_secs_f64(), speed);
+                println!(
+                    "Copied {} bytes in {:.2}s ({:.2} MB/s)",
+                    bytes_copied,
+                    duration.as_secs_f64(),
+                    speed
+                );
             }
             Ok(bytes_copied)
         }
@@ -305,7 +345,14 @@ fn copy_file(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: boo
     }
 }
 
-fn copy_directory_with_stats(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: bool, stats: &mut CopyStats) -> Result<(), CopyError> {
+fn copy_directory_with_stats(
+    src: &Path,
+    dst: &Path,
+    verbose: bool,
+    progress: bool,
+    use_ram: bool,
+    stats: &mut CopyStats,
+) -> Result<(), CopyError> {
     if !dst.exists() {
         if verbose {
             println!("Creating destination directory: {}", dst.display());
@@ -326,40 +373,56 @@ fn copy_directory(src: &Path, dst: &Path, verbose: bool, progress: bool) -> Resu
     copy_directory_with_stats(src, dst, verbose, progress, false, &mut stats)
 }
 
-fn copy_directory_recursive_with_stats(src: &Path, dst: &Path, verbose: bool, progress: bool, use_ram: bool, stats: &mut CopyStats) -> Result<(), CopyError> {
+fn copy_directory_recursive_with_stats(
+    src: &Path,
+    dst: &Path,
+    verbose: bool,
+    progress: bool,
+    use_ram: bool,
+    stats: &mut CopyStats,
+) -> Result<(), CopyError> {
     // Count total files first for progress tracking
     let total_files = count_files(src)?;
-    
+
     #[cfg(feature = "progress")]
     let (multi, overall_pb, current_pb) = {
         use std::io::IsTerminal;
         if progress && std::io::stdout().is_terminal() {
-        let multi = MultiProgress::new();
-        let overall_pb = multi.add(ProgressBar::new(total_files as u64));
-        overall_pb.set_style(
-            ProgressStyle::default_bar()
-                .template("[{bar:40.cyan/blue}] {pos}/{len} files ({percent}%)")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-        let current_pb = multi.add(ProgressBar::new(0));
-        current_pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  [{bar:30.green/yellow}] {bytes}/{total_bytes} ({percent}%) {msg}")
-                .unwrap()
-                .progress_chars("=>-"),
-        );
+            let multi = MultiProgress::new();
+            let overall_pb = multi.add(ProgressBar::new(total_files as u64));
+            overall_pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{bar:40.cyan/blue}] {pos}/{len} files ({percent}%)")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            let current_pb = multi.add(ProgressBar::new(0));
+            current_pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("  [{bar:30.green/yellow}] {bytes}/{total_bytes} ({percent}%) {msg}")
+                    .unwrap()
+                    .progress_chars("=>-"),
+            );
             (Some(multi), Some(overall_pb), Some(current_pb))
         } else {
             (None, None, None)
         }
     };
-    
+
     #[cfg(not(feature = "progress"))]
     let (multi, overall_pb, current_pb): (Option<()>, Option<()>, Option<()>) = (None, None, None);
 
     #[cfg(feature = "progress")]
-    copy_directory_recursive_impl(src, dst, verbose, progress, false, stats, &overall_pb, &current_pb)?;
+    copy_directory_recursive_impl(
+        src,
+        dst,
+        verbose,
+        progress,
+        false,
+        stats,
+        &overall_pb,
+        &current_pb,
+    )?;
     #[cfg(not(feature = "progress"))]
     copy_directory_recursive_impl(src, dst, verbose, progress, false, stats, &None, &None)?;
 
@@ -423,12 +486,12 @@ fn copy_directory_recursive_impl(
     // Collect files and directories separately for parallel processing
     let mut dirs = Vec::new();
     let mut files = Vec::new();
-    
+
     for entry in entries {
         let entry_path = entry.path();
         let file_name = entry.file_name();
         let dst_path = dst.join(&file_name);
-        
+
         if entry_path.is_dir() {
             dirs.push((entry_path, dst_path));
         } else {
@@ -439,138 +502,174 @@ fn copy_directory_recursive_impl(
     // Process directories first (sequential, as they may contain files)
     for (src_path, dst_path) in dirs {
         if verbose && !progress {
-            println!("Copying directory: {} -> {}", src_path.display(), dst_path.display());
+            println!(
+                "Copying directory: {} -> {}",
+                src_path.display(),
+                dst_path.display()
+            );
         }
         fs::create_dir_all(&dst_path).map_err(|e| CopyError::IoError {
             message: format!("Failed to create directory: {}", dst_path.display()),
             error: e,
         })?;
-            #[cfg(feature = "progress")]
-            copy_directory_recursive_impl(&src_path, &dst_path, verbose, progress, use_ram, stats, overall_pb, current_pb)?;
-            #[cfg(not(feature = "progress"))]
-            copy_directory_recursive_impl(&src_path, &dst_path, verbose, progress, use_ram, stats, &None, &None)?;
+        #[cfg(feature = "progress")]
+        copy_directory_recursive_impl(
+            &src_path, &dst_path, verbose, progress, use_ram, stats, overall_pb, current_pb,
+        )?;
+        #[cfg(not(feature = "progress"))]
+        copy_directory_recursive_impl(
+            &src_path, &dst_path, verbose, progress, use_ram, stats, &None, &None,
+        )?;
     }
 
     // Process files in parallel if feature enabled
     #[cfg(feature = "parallel")]
     {
         let stats_arc = Arc::new(Mutex::new((0usize, 0u64)));
-        files.par_iter().try_for_each(|(src_path, dst_path, file_name)| -> Result<(), CopyError> {
-            // Cache metadata
-            let file_size = fs::metadata(src_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
-            
-            #[cfg(feature = "progress")]
-            if let Some(ref pb) = current_pb {
-                pb.set_length(file_size);
-                pb.set_message(file_name.to_string_lossy().to_string());
-                pb.set_position(0);
-            }
-            
-            if verbose && !progress {
-                println!("Copying file: {} -> {}", src_path.display(), dst_path.display());
-            } else if progress {
-                let show_simple = {
-                    #[cfg(feature = "progress")]
-                    { current_pb.is_none() }
-                    #[cfg(not(feature = "progress"))]
-                    { true }
-                };
-                if show_simple {
-                    print!("  {} ({} bytes)... ", file_name.to_string_lossy(), file_size);
-                    use std::io::Write;
-                    io::stdout().flush().unwrap();
+        files.par_iter().try_for_each(
+            |(src_path, dst_path, file_name)| -> Result<(), CopyError> {
+                // Cache metadata
+                let file_size = fs::metadata(src_path).map(|m| m.len()).unwrap_or(0);
+
+                #[cfg(feature = "progress")]
+                if let Some(ref pb) = current_pb {
+                    pb.set_length(file_size);
+                    pb.set_message(file_name.to_string_lossy().to_string());
+                    pb.set_position(0);
                 }
-            }
-            
-            let bytes = if use_ram {
-                utils::copy_file_via_ram(src_path, dst_path).map_err(|e| CopyError::IoError {
-                    message: format!(
-                        "Failed to copy file from {} to {}",
+
+                if verbose && !progress {
+                    println!(
+                        "Copying file: {} -> {}",
                         src_path.display(),
                         dst_path.display()
-                    ),
-                    error: e,
-                })?
-            } else {
-                fs::copy(src_path, dst_path).map_err(|e| CopyError::IoError {
-                    message: format!(
-                        "Failed to copy file from {} to {}",
-                        src_path.display(),
-                        dst_path.display()
-                    ),
-                    error: e,
-                })?
-            };
-            
-            #[cfg(feature = "progress")]
-            if let Some(ref pb) = current_pb {
-                pb.finish();
-            }
-            
-            {
-                let mut s = stats_arc.lock().unwrap();
-                s.0 += 1;
-                s.1 += bytes;
-            }
-            
-            #[cfg(feature = "progress")]
-            if let Some(ref pb) = overall_pb {
-                pb.inc(1);
-            }
-            
-            {
-                let show_check = {
-                    #[cfg(feature = "progress")]
-                    { progress && current_pb.is_none() }
-                    #[cfg(not(feature = "progress"))]
-                    { progress }
-                };
-                if show_check {
-                    println!("✓");
+                    );
+                } else if progress {
+                    let show_simple = {
+                        #[cfg(feature = "progress")]
+                        {
+                            current_pb.is_none()
+                        }
+                        #[cfg(not(feature = "progress"))]
+                        {
+                            true
+                        }
+                    };
+                    if show_simple {
+                        print!(
+                            "  {} ({} bytes)... ",
+                            file_name.to_string_lossy(),
+                            file_size
+                        );
+                        use std::io::Write;
+                        io::stdout().flush().unwrap();
+                    }
                 }
-            }
-            
-            Ok(())
-        })?;
-        
+
+                let bytes = if use_ram {
+                    utils::copy_file_via_ram(src_path, dst_path).map_err(|e| {
+                        CopyError::IoError {
+                            message: format!(
+                                "Failed to copy file from {} to {}",
+                                src_path.display(),
+                                dst_path.display()
+                            ),
+                            error: e,
+                        }
+                    })?
+                } else {
+                    fs::copy(src_path, dst_path).map_err(|e| CopyError::IoError {
+                        message: format!(
+                            "Failed to copy file from {} to {}",
+                            src_path.display(),
+                            dst_path.display()
+                        ),
+                        error: e,
+                    })?
+                };
+
+                #[cfg(feature = "progress")]
+                if let Some(ref pb) = current_pb {
+                    pb.finish();
+                }
+
+                {
+                    let mut s = stats_arc.lock().unwrap();
+                    s.0 += 1;
+                    s.1 += bytes;
+                }
+
+                #[cfg(feature = "progress")]
+                if let Some(ref pb) = overall_pb {
+                    pb.inc(1);
+                }
+
+                {
+                    let show_check = {
+                        #[cfg(feature = "progress")]
+                        {
+                            progress && current_pb.is_none()
+                        }
+                        #[cfg(not(feature = "progress"))]
+                        {
+                            progress
+                        }
+                    };
+                    if show_check {
+                        println!("✓");
+                    }
+                }
+
+                Ok(())
+            },
+        )?;
+
         let (files_count, bytes_count) = *stats_arc.lock().unwrap();
         stats.files_copied += files_count;
         stats.bytes_copied += bytes_count;
     }
-    
+
     #[cfg(not(feature = "parallel"))]
     {
         for (src_path, dst_path, file_name) in files {
             // Cache metadata
-            let file_size = fs::metadata(&src_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
-            
+            let file_size = fs::metadata(&src_path).map(|m| m.len()).unwrap_or(0);
+
             #[cfg(feature = "progress")]
             if let Some(ref pb) = current_pb {
                 pb.set_length(file_size);
                 pb.set_message(file_name.to_string_lossy().to_string());
                 pb.set_position(0);
             }
-            
+
             if verbose && !progress {
-                println!("Copying file: {} -> {}", src_path.display(), dst_path.display());
+                println!(
+                    "Copying file: {} -> {}",
+                    src_path.display(),
+                    dst_path.display()
+                );
             } else if progress {
                 let show_simple = {
                     #[cfg(feature = "progress")]
-                    { current_pb.is_none() }
+                    {
+                        current_pb.is_none()
+                    }
                     #[cfg(not(feature = "progress"))]
-                    { true }
+                    {
+                        true
+                    }
                 };
                 if show_simple {
-                    print!("  {} ({} bytes)... ", file_name.to_string_lossy(), file_size);
+                    print!(
+                        "  {} ({} bytes)... ",
+                        file_name.to_string_lossy(),
+                        file_size
+                    );
                     use std::io::Write;
                     io::stdout().flush().unwrap();
                 }
             }
-            
+
             let bytes = if use_ram {
                 utils::copy_file_via_ram(&src_path, &dst_path).map_err(|e| CopyError::IoError {
                     message: format!(
@@ -590,26 +689,30 @@ fn copy_directory_recursive_impl(
                     error: e,
                 })?
             };
-            
+
             #[cfg(feature = "progress")]
             if let Some(ref pb) = current_pb {
                 pb.finish();
             }
-            
+
             stats.files_copied += 1;
             stats.bytes_copied += bytes;
-            
+
             #[cfg(feature = "progress")]
             if let Some(ref pb) = overall_pb {
                 pb.inc(1);
             }
-            
+
             {
                 let show_check = {
                     #[cfg(feature = "progress")]
-                    { progress && current_pb.is_none() }
+                    {
+                        progress && current_pb.is_none()
+                    }
                     #[cfg(not(feature = "progress"))]
-                    { progress }
+                    {
+                        progress
+                    }
                 };
                 if show_check {
                     println!("✓");
@@ -665,12 +768,12 @@ mod tests {
         let dst_dir = temp_dir.path().join("dst");
         fs::create_dir_all(&src_dir).unwrap();
         fs::create_dir_all(&dst_dir).unwrap();
-        
+
         fs::write(src_dir.join("test.txt"), "test content").unwrap();
-        
+
         let src_path = LocalPath::parse(src_dir.join("test.txt").to_str().unwrap()).unwrap();
         let dst_path = LocalPath::parse(dst_dir.join("test_copy.txt").to_str().unwrap()).unwrap();
-        
+
         (temp_dir, src_path, dst_path)
     }
 
@@ -680,7 +783,7 @@ mod tests {
         let result = copy_local(&src, &dst, false, false);
         assert!(result.is_ok());
         assert!(dst.as_path().exists());
-        
+
         let content = fs::read_to_string(dst.as_path()).unwrap();
         assert_eq!(content, "test content");
     }
@@ -690,7 +793,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let src = LocalPath::parse("/nonexistent/path/file.txt").unwrap();
         let dst = LocalPath::parse(temp_dir.path().join("dest.txt").to_str().unwrap()).unwrap();
-        
+
         let result = copy_local(&src, &dst, false, false);
         assert!(result.is_err());
         assert!(matches!(result, Err(CopyError::SourceNotFound(_))));
@@ -701,19 +804,19 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let src_dir = temp_dir.path().join("src");
         let dst_dir = temp_dir.path().join("dst");
-        
+
         fs::create_dir_all(src_dir.join("subdir")).unwrap();
         fs::write(src_dir.join("file1.txt"), "content1").unwrap();
         fs::write(src_dir.join("subdir").join("file2.txt"), "content2").unwrap();
-        
+
         let src = LocalPath::parse(src_dir.to_str().unwrap()).unwrap();
         let dst = LocalPath::parse(dst_dir.to_str().unwrap()).unwrap();
-        
+
         let result = copy_local(&src, &dst, false, false);
         assert!(result.is_ok());
         assert!(dst_dir.join("file1.txt").exists());
         assert!(dst_dir.join("subdir").join("file2.txt").exists());
-        
+
         let content1 = fs::read_to_string(dst_dir.join("file1.txt")).unwrap();
         let content2 = fs::read_to_string(dst_dir.join("subdir").join("file2.txt")).unwrap();
         assert_eq!(content1, "content1");
