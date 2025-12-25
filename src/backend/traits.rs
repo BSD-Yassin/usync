@@ -23,6 +23,7 @@ pub struct CopyOptions {
     pub use_ram: bool,
     pub recursive: bool,
     pub ssh_opts: Vec<String>,
+    pub dry_run: bool,
 }
 
 impl Default for CopyOptions {
@@ -33,6 +34,7 @@ impl Default for CopyOptions {
             use_ram: false,
             recursive: false,
             ssh_opts: Vec::new(),
+            dry_run: false,
         }
     }
 }

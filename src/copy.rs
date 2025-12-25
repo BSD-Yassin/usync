@@ -96,6 +96,7 @@ pub fn copy(
         use_ram,
         recursive: true,
         ssh_opts: ssh_opts.to_vec(),
+        dry_run: false,
     };
 
     match (create_backend(src), create_backend(dst)) {

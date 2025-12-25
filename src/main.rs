@@ -1,5 +1,6 @@
 mod backend;
 mod copy;
+mod operations;
 mod path;
 mod protocol;
 mod remote;
