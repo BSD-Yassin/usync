@@ -582,49 +582,64 @@ fn copy_directory_recursive_impl(
             None
         };
 
-        dirs.par_iter().try_for_each(|(src_path, dst_path)| -> Result<(), CopyError> {
-            if verbose && !progress {
-                println!(
-                    "Copying directory: {} -> {}",
-                    src_path.display(),
-                    dst_path.display()
-                );
-            }
-            fs::create_dir_all(dst_path).map_err(|e| CopyError::IoError {
-                message: format!("Failed to create directory: {}", dst_path.display()),
-                error: e,
-            })?;
-            
-            let mut local_stats = if let Some(ref arc) = stats_arc {
-                CopyStats {
-                    bytes_copied: 0,
-                    files_copied: 0,
-                    files_skipped: 0,
-                    start_time: arc.lock().unwrap().start_time,
+        dirs.par_iter()
+            .try_for_each(|(src_path, dst_path)| -> Result<(), CopyError> {
+                if verbose && !progress {
+                    println!(
+                        "Copying directory: {} -> {}",
+                        src_path.display(),
+                        dst_path.display()
+                    );
                 }
-            } else {
-                CopyStats::new_minimal()
-            };
-            
-            #[cfg(feature = "progress")]
-            copy_directory_recursive_impl(
-                src_path, dst_path, verbose, progress, use_ram, &mut local_stats, overall_pb, current_pb,
-            )?;
-            #[cfg(not(feature = "progress"))]
-            copy_directory_recursive_impl(
-                src_path, dst_path, verbose, progress, use_ram, &mut local_stats, &None, &None,
-            )?;
-            
-            if let Some(ref arc) = stats_arc {
-                let mut s = arc.lock().unwrap();
-                s.files_copied += local_stats.files_copied;
-                s.bytes_copied += local_stats.bytes_copied;
-                s.files_skipped += local_stats.files_skipped;
-            }
-            
-            Ok(())
-        })?;
-        
+                fs::create_dir_all(dst_path).map_err(|e| CopyError::IoError {
+                    message: format!("Failed to create directory: {}", dst_path.display()),
+                    error: e,
+                })?;
+
+                let mut local_stats = if let Some(ref arc) = stats_arc {
+                    CopyStats {
+                        bytes_copied: 0,
+                        files_copied: 0,
+                        files_skipped: 0,
+                        start_time: arc.lock().unwrap().start_time,
+                    }
+                } else {
+                    CopyStats::new_minimal()
+                };
+
+                #[cfg(feature = "progress")]
+                copy_directory_recursive_impl(
+                    src_path,
+                    dst_path,
+                    verbose,
+                    progress,
+                    use_ram,
+                    &mut local_stats,
+                    overall_pb,
+                    current_pb,
+                )?;
+                #[cfg(not(feature = "progress"))]
+                copy_directory_recursive_impl(
+                    src_path,
+                    dst_path,
+                    verbose,
+                    progress,
+                    use_ram,
+                    &mut local_stats,
+                    &None,
+                    &None,
+                )?;
+
+                if let Some(ref arc) = stats_arc {
+                    let mut s = arc.lock().unwrap();
+                    s.files_copied += local_stats.files_copied;
+                    s.bytes_copied += local_stats.bytes_copied;
+                    s.files_skipped += local_stats.files_skipped;
+                }
+
+                Ok(())
+            })?;
+
         if let Some(ref arc) = stats_arc {
             let s = arc.lock().unwrap();
             stats.files_copied += s.files_copied;
@@ -665,8 +680,9 @@ fn copy_directory_recursive_impl(
         } else {
             None
         };
-        files.iter().try_for_each(
-            |(src_path, dst_path, file_name)| -> Result<(), CopyError> {
+        files
+            .iter()
+            .try_for_each(|(src_path, dst_path, file_name)| -> Result<(), CopyError> {
                 let file_size = fs::metadata(src_path).map(|m| m.len()).unwrap_or(0);
 
                 #[cfg(feature = "progress")]
@@ -760,8 +776,7 @@ fn copy_directory_recursive_impl(
                 }
 
                 Ok(())
-            },
-        )?;
+            })?;
 
         if let Some(ref stats_lock) = stats_arc {
             let (files_count, bytes_count) = *stats_lock.lock().unwrap();
