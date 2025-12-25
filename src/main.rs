@@ -277,28 +277,26 @@ fn main() {
                         eprintln!("Warning: Copy succeeded but failed to remove source: {}", e);
                     }
                 }
+            } else if verbose {
+                #[cfg(feature = "color")]
+                println!(
+                    "{} {} to {}",
+                    "✓".green().bold(),
+                    "Successfully copied".green(),
+                    format!("{} to {}", src_str, dst_str)
+                );
+                #[cfg(not(feature = "color"))]
+                println!("✓ Successfully copied {} to {}", src_str, dst_str);
             } else {
-                if verbose {
-                    #[cfg(feature = "color")]
-                    println!(
-                        "{} {} to {}",
-                        "✓".green().bold(),
-                        "Successfully copied".green(),
-                        format!("{} to {}", src_str, dst_str)
-                    );
-                    #[cfg(not(feature = "color"))]
-                    println!("✓ Successfully copied {} to {}", src_str, dst_str);
-                } else {
-                    #[cfg(feature = "color")]
-                    println!(
-                        "{} {} to {}",
-                        "Successfully copied".green(),
-                        src_str,
-                        dst_str
-                    );
-                    #[cfg(not(feature = "color"))]
-                    println!("Successfully copied {} to {}", src_str, dst_str);
-                }
+                #[cfg(feature = "color")]
+                println!(
+                    "{} {} to {}",
+                    "Successfully copied".green(),
+                    src_str,
+                    dst_str
+                );
+                #[cfg(not(feature = "color"))]
+                println!("Successfully copied {} to {}", src_str, dst_str);
             }
             stats.print_summary(verbose);
         }

@@ -194,8 +194,8 @@ pub fn copy_ssh_to_ssh(
     src: &RemotePath,
     dst: &RemotePath,
     verbose: bool,
-    ssh_opts: &[String],
-    progress: bool,
+    _ssh_opts: &[String],
+    _progress: bool,
 ) -> Result<(), RemoteCopyError> {
     if verbose {
         println!(
@@ -215,10 +215,17 @@ pub fn copy_ssh_to_ssh(
 #[derive(Debug)]
 pub enum RemoteCopyError {
     NotImplemented(String),
-    UnsupportedProtocol { src: String, dst: String },
+    UnsupportedProtocol {
+        src: String,
+        dst: String,
+    },
     ConnectionError(String),
+    #[allow(dead_code)]
     AuthenticationError(String),
-    IoError { message: String, error: String },
+    IoError {
+        message: String,
+        error: String,
+    },
 }
 
 impl std::fmt::Display for RemoteCopyError {

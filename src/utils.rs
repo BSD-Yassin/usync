@@ -126,6 +126,7 @@ pub fn copy_file_via_ram(src: &Path, dst: &Path) -> io::Result<u64> {
 }
 
 /// Get file size
+#[allow(dead_code)]
 pub fn get_file_size(path: &Path) -> io::Result<u64> {
     fs::metadata(path).map(|m| m.len())
 }

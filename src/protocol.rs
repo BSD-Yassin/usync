@@ -94,22 +94,22 @@ pub fn parse_path(path_str: &str) -> Result<Path, PathParseError> {
                 } else {
                     crate::path::LocalPath::parse(path_str)
                         .map(Path::Local)
-                        .map_err(|e| PathParseError::LocalPathError(e))
+                        .map_err(PathParseError::LocalPathError)
                 }
             } else {
                 crate::path::LocalPath::parse(path_str)
                     .map(Path::Local)
-                    .map_err(|e| PathParseError::LocalPathError(e))
+                    .map_err(PathParseError::LocalPathError)
             }
         } else {
             crate::path::LocalPath::parse(path_str)
                 .map(Path::Local)
-                .map_err(|e| PathParseError::LocalPathError(e))
+                .map_err(PathParseError::LocalPathError)
         }
     } else {
         crate::path::LocalPath::parse(path_str)
             .map(Path::Local)
-            .map_err(|e| PathParseError::LocalPathError(e))
+            .map_err(PathParseError::LocalPathError)
     }
 }
 

@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::Path;
+#[cfg(feature = "parallel")]
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -83,7 +84,7 @@ pub fn copy(
         }
         (ProtocolPath::Remote(src_remote), ProtocolPath::Remote(dst_remote)) => {
             remote::copy_remote(src_remote, dst_remote, verbose, ssh_opts, progress)
-                .map_err(|e| CopyError::RemoteError(e))
+                .map_err(CopyError::RemoteError)
                 .map(|_| ())
         }
         (ProtocolPath::Remote(src_remote), ProtocolPath::Local(dst_local)) => {
@@ -137,12 +138,12 @@ fn copy_from_remote_to_local(
         crate::protocol::Protocol::Ssh | crate::protocol::Protocol::Sftp => {
             let dst_path = dst.as_path();
             remote::copy_from_ssh_to_file(src, dst_path, verbose, ssh_opts, progress)
-                .map_err(|e| CopyError::RemoteError(e))
+                .map_err(CopyError::RemoteError)
         }
         crate::protocol::Protocol::Http | crate::protocol::Protocol::Https => {
             let dst_path = dst.as_path();
             remote::copy_from_http_to_file(src, dst_path, verbose, progress)
-                .map_err(|e| CopyError::RemoteError(e))
+                .map_err(CopyError::RemoteError)
         }
         _ => Err(CopyError::UnsupportedProtocol(format!(
             "Copying from {} protocol is not supported",
@@ -163,7 +164,7 @@ fn copy_from_local_to_remote(
             let src_path = src.as_path();
             if src.is_file() {
                 remote::copy_file_to_ssh(src_path, dst, verbose, ssh_opts, progress)
-                    .map_err(|e| CopyError::RemoteError(e))
+                    .map_err(CopyError::RemoteError)
             } else {
                 Err(CopyError::UnsupportedProtocol(
                     "Directory copying to remote is not yet implemented".to_string(),
@@ -178,6 +179,7 @@ fn copy_from_local_to_remote(
 }
 
 // Legacy function for backward compatibility
+#[allow(dead_code)]
 pub fn copy_local(
     src: &LocalPath,
     dst: &LocalPath,
@@ -368,6 +370,7 @@ fn copy_directory_with_stats(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn copy_directory(src: &Path, dst: &Path, verbose: bool, progress: bool) -> Result<(), CopyError> {
     let mut stats = CopyStats::new();
     copy_directory_with_stats(src, dst, verbose, progress, false, &mut stats)
@@ -381,11 +384,10 @@ fn copy_directory_recursive_with_stats(
     use_ram: bool,
     stats: &mut CopyStats,
 ) -> Result<(), CopyError> {
-    // Count total files first for progress tracking
-    let total_files = count_files(src)?;
-
     #[cfg(feature = "progress")]
     let (multi, overall_pb, current_pb) = {
+        // Count total files first for progress tracking
+        let total_files = count_files(src)?;
         use std::io::IsTerminal;
         if progress && std::io::stdout().is_terminal() {
             let multi = MultiProgress::new();
@@ -410,7 +412,8 @@ fn copy_directory_recursive_with_stats(
     };
 
     #[cfg(not(feature = "progress"))]
-    let (multi, overall_pb, current_pb): (Option<()>, Option<()>, Option<()>) = (None, None, None);
+    let (_multi, _overall_pb, _current_pb): (Option<()>, Option<()>, Option<()>) =
+        (None, None, None);
 
     #[cfg(feature = "progress")]
     copy_directory_recursive_impl(
@@ -418,13 +421,13 @@ fn copy_directory_recursive_with_stats(
         dst,
         verbose,
         progress,
-        false,
+        use_ram,
         stats,
         &overall_pb,
         &current_pb,
     )?;
     #[cfg(not(feature = "progress"))]
-    copy_directory_recursive_impl(src, dst, verbose, progress, false, stats, &None, &None)?;
+    copy_directory_recursive_impl(src, dst, verbose, progress, use_ram, stats, &None, &None)?;
 
     #[cfg(feature = "progress")]
     if let (Some(ref o), Some(ref c)) = (overall_pb, current_pb) {
@@ -435,6 +438,7 @@ fn copy_directory_recursive_with_stats(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn count_files(path: &Path) -> Result<usize, CopyError> {
     let mut count = 0;
     if path.is_dir() {
@@ -460,6 +464,7 @@ fn count_files(path: &Path) -> Result<usize, CopyError> {
     Ok(count)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_directory_recursive_impl(
     src: &Path,
     dst: &Path,
