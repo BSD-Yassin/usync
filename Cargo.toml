@@ -28,3 +28,7 @@ s3-sdk = ["aws-sdk-s3", "tokio"]
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[lib]
+name = "usync"
+path = "src/lib.rs"

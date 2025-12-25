@@ -9,7 +9,7 @@ mod utils;
 
 use clap::Parser;
 
-use copy::copy_with_options;
+use copy;
 use protocol::parse_path;
 use operations::sync::SyncStats;
 use std::fs;
