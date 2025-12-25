@@ -307,7 +307,7 @@ fn main() {
             dry_run,
         ).map(|stats| SyncResult::Sync(stats))
     } else {
-        copy_with_options(
+        copy::copy_with_options_and_filters(
             &src_path,
             &dst_path,
             verbose,
@@ -316,6 +316,7 @@ fn main() {
             args.use_ram,
             checksum_algorithm,
             dry_run,
+            filters,
         ).map(|stats| SyncResult::Copy(stats))
     };
 

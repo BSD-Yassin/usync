@@ -16,7 +16,7 @@ pub struct FileInfo {
     pub modified: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CopyOptions {
     pub verbose: bool,
     pub progress: bool,
@@ -24,7 +24,7 @@ pub struct CopyOptions {
     pub recursive: bool,
     pub ssh_opts: Vec<String>,
     pub dry_run: bool,
-    pub filters: Option<Box<dyn crate::filters::Filter>>,
+    pub filters: Option<std::sync::Arc<dyn crate::filters::Filter>>,
 }
 
 impl Default for CopyOptions {

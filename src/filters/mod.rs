@@ -12,6 +12,12 @@ pub trait Filter: Send + Sync {
     fn matches(&self, file: &FileInfo) -> bool;
 }
 
+impl Filter for FilterChain {
+    fn matches(&self, file: &FileInfo) -> bool {
+        self.filters.iter().all(|f| f.matches(file))
+    }
+}
+
 pub struct FilterChain {
     filters: Vec<Box<dyn Filter>>,
 }

@@ -111,6 +111,7 @@ pub fn copy_with_options(
         recursive: true,
         ssh_opts: ssh_opts.to_vec(),
         dry_run,
+        filters: None,
     };
 
     match (create_backend(src), create_backend(dst)) {
@@ -1116,6 +1117,7 @@ pub fn sync_with_options(
         recursive: true,
         ssh_opts: ssh_opts.to_vec(),
         dry_run,
+        filters: None,
     };
 
     match (create_backend(src), create_backend(dst)) {
