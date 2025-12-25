@@ -1,5 +1,6 @@
 mod backend;
 mod copy;
+mod filters;
 mod operations;
 mod path;
 mod protocol;
@@ -150,6 +151,22 @@ struct Args {
     /// Sync mode: only copy changed/new files (one-way sync)
     #[arg(long = "sync")]
     sync: bool,
+
+    /// Include files matching pattern (glob, can be used multiple times)
+    #[arg(long = "include", value_name = "PATTERN")]
+    include: Vec<String>,
+
+    /// Exclude files matching pattern (glob, can be used multiple times)
+    #[arg(long = "exclude", value_name = "PATTERN")]
+    exclude: Vec<String>,
+
+    /// Minimum file size in bytes
+    #[arg(long = "min-size", value_name = "BYTES")]
+    min_size: Option<u64>,
+
+    /// Maximum file size in bytes
+    #[arg(long = "max-size", value_name = "BYTES")]
+    max_size: Option<u64>,
 }
 
 fn main() {

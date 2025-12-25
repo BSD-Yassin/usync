@@ -24,6 +24,7 @@ pub struct CopyOptions {
     pub recursive: bool,
     pub ssh_opts: Vec<String>,
     pub dry_run: bool,
+    pub filters: Option<Box<dyn crate::filters::Filter>>,
 }
 
 impl Default for CopyOptions {
@@ -35,6 +36,7 @@ impl Default for CopyOptions {
             recursive: false,
             ssh_opts: Vec::new(),
             dry_run: false,
+            filters: None,
         }
     }
 }
