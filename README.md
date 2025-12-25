@@ -24,11 +24,44 @@ sync does echo to the good old rsync, but I also wanted to emphasize continous f
   - SSH options support (`-s`, `--ssh-opt`)
   - Move files instead of copying (`-m`, `--move`)
 - **Cloud Services** (via CLI tools):
-  - AWS S3 via `aws s3 cp` and `aws s3 sync`
-  - Other cloud storage via their respective CLI tools
+  - AWS S3 via `aws s3 cp` and `aws s3 sync` (fully tested and supported)
+  - Other cloud storage via their respective CLI tools (see [Cloud Services](#cloud-services) below)
 - **Experimental Features**:
   - Continuous synchronization daemon (see [Daemon Mode](#daemon-mode-experimental) below)
-- **Cross-Platform**: Works on Unix-like systems (Linux, macOS, BSD) and Windows
+- **Cross-Platform**: Works on Unix-like systems (Linux, macOS, BSD) and Windows (experimental)
+
+## Experimental and Untested Features
+
+**⚠️ Important**: The following features are experimental, placeholder implementations, or not yet fully tested. Suggestions, fixes, and contributions are welcome!
+
+### Windows Builds
+- Windows builds are **experimental** and not fully tested
+- Windows compilation is currently commented out in CI/CD workflows
+- Contributions to improve Windows support are welcome
+
+### Cloud Storage Providers (Placeholder/Experimental)
+
+The following cloud storage providers have placeholder implementations but are **not tested**:
+
+- **Azure Blob Storage**: Placeholder implementation via `az storage` CLI
+  - Not tested in production
+  - Suggestions and fixes welcome
+  - Will use Azure CLI when fully implemented
+
+- **Google Cloud Storage**: Placeholder implementation via `gsutil` CLI
+  - Not tested in production
+  - Suggestions and fixes welcome
+  - Will use Google Cloud SDK when fully implemented
+
+### Planned Cloud Storage Providers
+
+The following cloud storage providers are planned but **not yet implemented**:
+
+- **Google Drive**: Planned, will be an optional feature (not in default build)
+- **Dropbox**: Planned, will be an optional feature (not in default build)
+- **SharePoint**: Planned, will be an optional feature (not in default build)
+
+These will follow the project's methodology of using native CLI tools rather than SDKs when implemented. Contributions for these features are welcome!
 
 ## Installation
 
@@ -183,12 +216,18 @@ usync s3://bucket/file.txt ./local.txt
 
 #### Other Cloud Services
 
-usync can work with other cloud storage services that provide CLI tools:
-- Google Cloud Storage (via `gsutil`)
-- Azure Blob Storage (via `az storage`)
-- Other S3-compatible services
+**⚠️ Experimental/Untested**: The following cloud storage providers have placeholder implementations but are **not tested**:
 
-The methodology is to rely on native CLI tools rather than SDKs for better compatibility and maintainability.
+- **Google Cloud Storage** (via `gsutil`): Placeholder implementation, not tested. Suggestions and fixes welcome.
+- **Azure Blob Storage** (via `az storage`): Placeholder implementation, not tested. Suggestions and fixes welcome.
+- **Other S3-compatible services**: Should work with any S3-compatible service via AWS CLI
+
+**Planned Cloud Storage Providers** (not yet implemented, will be optional features):
+- Google Drive (via `gdrive` CLI or similar)
+- Dropbox (via `dropbox` CLI or similar)
+- SharePoint (via `sharepoint` CLI or similar)
+
+The methodology is to rely on native CLI tools rather than SDKs for better compatibility and maintainability. Contributions for implementing these providers are welcome!
 
 ### Daemon Mode (Experimental)
 
@@ -278,6 +317,26 @@ The daemon monitors specified directories for changes using file system events (
 
 ## Development
 
+### Nix Development Environment
+
+usync includes Nix development environment files (`shell.nix` and `flake.nix`) for easy setup:
+
+```bash
+# Using nix-shell (traditional)
+nix-shell
+
+# Using nix develop (flakes)
+nix develop
+
+# Both provide:
+# - Rust toolchain (latest stable)
+# - Cargo
+# - All build dependencies
+# - Development tools
+```
+
+The Nix files are tracked in git to ensure a consistent development environment across different systems. All dependencies are automatically provided by Nix.
+
 ### Building
 
 ```bash
@@ -338,6 +397,8 @@ usync/
 │   ├── fixtures/     # Test fixtures
 │   └── test_runner.sh # Main test script
 ├── .github/workflows/ # CI/CD workflows
+├── shell.nix         # Nix development environment (traditional)
+├── flake.nix         # Nix development environment (flakes)
 ├── env.example       # Example environment variables
 └── Cargo.toml        # Project manifest and dependencies
 ```

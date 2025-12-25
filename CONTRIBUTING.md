@@ -51,10 +51,48 @@ Thank you for your interest in contributing to usync! This document provides gui
 
 ## Development Setup
 
+### Using Nix (Recommended)
+
+usync includes Nix development environment files for easy setup:
+
 ```bash
 # Clone your fork
 git clone https://github.com/YOUR_USERNAME/usync.git
 cd usync
+
+# Enter Nix development environment (traditional)
+nix-shell
+
+# Or using flakes
+nix develop
+
+# All dependencies are automatically provided
+# Build the project
+cargo build
+
+# Run tests
+cargo test
+./tests/test_runner.sh
+```
+
+The Nix files (`shell.nix` and `flake.nix`) are tracked in git to ensure a consistent development environment. They provide:
+- Rust toolchain (latest stable)
+- Cargo
+- All build dependencies (pkg-config, openssl, etc.)
+- Development tools
+- Platform-specific dependencies (handled automatically)
+
+### Manual Setup
+
+If you prefer not to use Nix:
+
+```bash
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/usync.git
+cd usync
+
+# Install Rust (if not already installed)
+# See https://rustup.rs/
 
 # Build the project
 cargo build

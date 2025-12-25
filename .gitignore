@@ -29,3 +29,6 @@ test/output/
 *.so
 *.dll
 *.exe
+
+# Nix
+flake.lock
