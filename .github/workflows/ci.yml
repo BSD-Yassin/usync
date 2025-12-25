@@ -55,14 +55,17 @@ jobs:
           #   arch: x86_64
           #   target: x86_64-pc-windows-msvc
           #   toolchain: stable
-          - os: macos-latest
-            arch: x86_64
-            target: x86_64-apple-darwin
-            toolchain: stable
+          # macOS: Only test native architecture (ARM64 on GitHub Actions)
+          # x86_64 requires cross-compilation which is complex on macOS
           - os: macos-latest
             arch: aarch64
             target: aarch64-apple-darwin
             toolchain: stable
+          # macOS x86_64 commented out - requires cross-compilation
+          # - os: macos-latest
+          #   arch: x86_64
+          #   target: x86_64-apple-darwin
+          #   toolchain: stable
           
           # Cross-compilation targets (using QEMU for testing)
           - os: ubuntu-latest
@@ -147,6 +150,8 @@ jobs:
     
     - name: Run unit tests (native)
       if: matrix.cross != true
+      env:
+        TARGET: ${{ matrix.target }}
       run: cargo test --target ${{ matrix.target }} --release
     
     - name: Run unit tests (cross-compiled)

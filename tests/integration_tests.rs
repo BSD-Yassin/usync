@@ -29,12 +29,54 @@ fn setup_test_env() -> (tempfile::TempDir, std::path::PathBuf) {
 
 fn get_binary_path() -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    
+    // Check for target-specific release binary first
+    let target = std::env::var("TARGET").unwrap_or_else(|_| {
+        // Try to detect target from CARGO_BUILD_TARGET or use default
+        std::env::var("CARGO_BUILD_TARGET").unwrap_or_else(|_| {
+            // Default to host target
+            if cfg!(target_os = "macos") {
+                if cfg!(target_arch = "aarch64") {
+                    "aarch64-apple-darwin".to_string()
+                } else {
+                    "x86_64-apple-darwin".to_string()
+                }
+            } else if cfg!(target_os = "linux") {
+                "x86_64-unknown-linux-gnu".to_string()
+            } else if cfg!(target_os = "windows") {
+                "x86_64-pc-windows-msvc".to_string()
+            } else {
+                "unknown".to_string()
+            }
+        })
+    });
+    
+    // Try target-specific path first
+    let target_release_path = format!("{}/target/{}/release/usync", manifest_dir, target);
+    if std::path::Path::new(&target_release_path).exists() {
+        return target_release_path;
+    }
+    
+    // Fallback to default release path
     let release_path = format!("{}/target/release/usync", manifest_dir);
     if std::path::Path::new(&release_path).exists() {
-        release_path
-    } else {
-        format!("{}/target/debug/usync", manifest_dir)
+        return release_path;
     }
+    
+    // Fallback to debug path
+    let debug_path = format!("{}/target/debug/usync", manifest_dir);
+    if std::path::Path::new(&debug_path).exists() {
+        return debug_path;
+    }
+    
+    // Last resort: try target-specific debug path
+    let target_debug_path = format!("{}/target/{}/debug/usync", manifest_dir, target);
+    if std::path::Path::new(&target_debug_path).exists() {
+        return target_debug_path;
+    }
+    
+    // If nothing found, return the default release path (test will fail with clear error)
+    release_path
 }
 
 #[test]
