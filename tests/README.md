@@ -73,7 +73,7 @@ This directory contains comprehensive tests for the usync tool.
 
 Run the test suites to see current pass/fail status. Most tests should pass when:
 - Binary is built (`cargo build --release`)
-- Test input files exist in `test/input/`
+- Test input files exist in `tests/input/`
 - Required system tools are available (curl/wget for HTTP, scp for SSH)
 
 ## Adding New Tests

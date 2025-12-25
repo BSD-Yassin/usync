@@ -108,7 +108,7 @@ usync/
 │   ├── copy.rs       # Local file copying
 │   └── remote.rs     # Remote protocol implementations
 ├── tests/            # Integration tests
-└── test/             # Test data
+└── tests/            # Test data and scripts
 ```
 
 ## Contributing

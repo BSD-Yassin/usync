@@ -2,7 +2,7 @@
 set -e
 
 BINARY="${1:-target/release/usync}"
-TEST_DIR="test"
+TEST_DIR="tests"
 
 echo "=== Running usync Integration Tests ==="
 echo "Using binary: $BINARY"
