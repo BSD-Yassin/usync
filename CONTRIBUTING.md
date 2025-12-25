@@ -27,14 +27,25 @@ Thank you for your interest in contributing to usync! This document provides gui
 
 ### Submitting Changes
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass (`cargo test`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+**Important**: Direct pushes to `main` are **not allowed**, even for maintainers. All changes must go through Pull Requests from forks.
+
+1. **Fork the repository** (required for all contributors, including maintainers)
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/usync.git`
+3. Add upstream: `git remote add upstream https://github.com/BSD-Yassin/usync.git`
+4. Create a feature branch: `git checkout -b feature/amazing-feature`
+5. Make your changes
+6. Add tests for new functionality
+7. Ensure all tests pass: `cargo test`
+8. Commit your changes: `git commit -m 'Add amazing feature'`
+9. Push to your fork: `git push origin feature/amazing-feature`
+10. **Open a Pull Request** from your fork to the main repository
+
+### Pull Request Requirements
+
+- All PRs require at least 1 approval before merging
+- All CI checks must pass (linting, tests)
+- PRs must be up to date with `main` branch
+- Conversation must be resolved before merging
 
 ### Code Style
 
