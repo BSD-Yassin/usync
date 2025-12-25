@@ -17,12 +17,18 @@ jobs:
     - name: Auto-approve PR from repository owner
       uses: actions/github-script@v7
       with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
-          github.rest.pulls.createReview({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            pull_number: context.issue.number,
-            event: 'APPROVE',
-            body: 'Auto-approved: PR from repository owner/maintainer'
-          })
-
+          const pr = context.payload.pull_request;
+          if (pr.user.login === context.repo.owner) {
+            github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              event: 'APPROVE',
+              body: '✅ Auto-approved: PR from repository owner/maintainer'
+            });
+            console.log(`Auto-approved PR #${pr.number} from ${pr.user.login}`);
+          } else {
+            console.log(`Skipping auto-approval: PR from ${pr.user.login}, not repository owner`);
+          }
