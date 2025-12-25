@@ -792,12 +792,15 @@ fn copy_from_s3_with_wildcard(
         }
     }
 
+    // AWS CLI not found
     #[cfg(feature = "s3-sdk")]
     {
         if verbose {
             println!("AWS CLI not found, trying SDK fallback...");
         }
-        // SDK fallback would go here
+        return Err(RemoteCopyError::NotImplemented(
+            "S3 SDK fallback for wildcards is not yet implemented".to_string(),
+        ));
     }
 
     #[cfg(not(feature = "s3-sdk"))]
@@ -806,21 +809,6 @@ fn copy_from_s3_with_wildcard(
             message: "AWS CLI not found and SDK feature not enabled".to_string(),
             error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
         });
-    }
-    
-    #[cfg(feature = "s3-sdk")]
-    {
-        Err(RemoteCopyError::NotImplemented(
-            "S3 SDK fallback for wildcards is not yet implemented".to_string(),
-        ))
-    }
-    
-    #[cfg(not(feature = "s3-sdk"))]
-    {
-        Err(RemoteCopyError::IoError {
-            message: "AWS CLI not found and SDK feature not enabled".to_string(),
-            error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
-        })
     }
 }
 
