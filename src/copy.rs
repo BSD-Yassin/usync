@@ -9,6 +9,8 @@ use crate::path::LocalPath;
 use crate::protocol::Path as ProtocolPath;
 use crate::remote;
 use crate::utils;
+use crate::backend::{create_backend, BackendInstance};
+use crate::backend::traits::{Backend, CopyOptions};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -81,6 +83,93 @@ impl CopyStats {
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 pub fn copy(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+) -> Result<CopyStats, CopyError> {
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts)
+        }
+        _ => {
+            copy_legacy(src, dst, verbose, ssh_opts, progress, use_ram)
+        }
+    }
+}
+
+fn copy_with_backends(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    src_backend: &BackendInstance,
+    dst_backend: &BackendInstance,
+    opts: &CopyOptions,
+) -> Result<CopyStats, CopyError> {
+    let src_str = match src {
+        ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+        ProtocolPath::Remote(remote) => remote.url.to_string(),
+    };
+
+    let dst_str = match dst {
+        ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+        ProtocolPath::Remote(remote) => remote.url.to_string(),
+    };
+
+    let src_is_dir = match src {
+        ProtocolPath::Local(local) => local.is_dir(),
+        ProtocolPath::Remote(_) => {
+            src_backend.as_backend().list(&src_str)
+                .map(|files| files.iter().any(|f| f.is_dir))
+                .unwrap_or(false)
+        }
+    };
+
+    if src_is_dir {
+        let stats = match dst_backend.as_backend().copy_directory(&src_str, &dst_str, opts) {
+            Ok(stats) => stats,
+            Err(e) => {
+                return Err(CopyError::IoError {
+                    message: format!("Backend directory copy failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        };
+        Ok(stats)
+    } else {
+        let bytes = match src_backend.as_backend().copy_file(&src_str, &dst_str, opts) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return Err(CopyError::IoError {
+                    message: format!("Backend copy failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        };
+        
+        let mut stats = if opts.verbose || opts.progress {
+            CopyStats::new()
+        } else {
+            CopyStats::new_minimal()
+        };
+        if stats.start_time.is_some() {
+            stats.files_copied = 1;
+            stats.bytes_copied = bytes;
+        }
+        Ok(stats)
+    }
+}
+
+fn copy_legacy(
     src: &ProtocolPath,
     dst: &ProtocolPath,
     verbose: bool,
@@ -890,6 +979,7 @@ pub enum CopyError {
     IoError { message: String, error: io::Error },
     RemoteError(crate::remote::RemoteCopyError),
     UnsupportedProtocol(String),
+    Other(String),
 }
 
 impl std::fmt::Display for CopyError {
@@ -909,6 +999,12 @@ impl std::fmt::Display for CopyError {
             }
             CopyError::UnsupportedProtocol(msg) => {
                 write!(f, "Unsupported protocol: {}\n\nSupported protocols: ssh://, sftp://, http://, https://, s3://\nFor more information, see: https://github.com/yassinbousaadi/usync", msg)
+            }
+            CopyError::Other(msg) => {
+                write!(f, "{}", msg)
+            }
+            CopyError::Other(msg) => {
+                write!(f, "{}", msg)
             }
         }
     }

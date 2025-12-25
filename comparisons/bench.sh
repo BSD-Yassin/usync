@@ -11,9 +11,16 @@ BENCH_DIR="$SCRIPT_DIR/bench"
 RESULTS_DIR="$SCRIPT_DIR/results"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_FILE="$RESULTS_DIR/results_${TIMESTAMP}.txt"
+RESULTS_MD="$RESULTS_DIR/results_${TIMESTAMP}.md"
 
 mkdir -p "$BENCH_DIR"/{source,dest}
 mkdir -p "$RESULTS_DIR"
+
+# Source checksum utilities
+CHECKSUM_UTILS="$PROJECT_ROOT/tests/checksum_utils.sh"
+if [ -f "$CHECKSUM_UTILS" ]; then
+    source "$CHECKSUM_UTILS"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -124,6 +131,43 @@ get_size() {
     fi
 }
 
+verify_integrity() {
+    local src="$1"
+    local dst="$2"
+    
+    if [ ! -f "$src" ] || [ ! -f "$dst" ]; then
+        return 1
+    fi
+    
+    if [ -f "$CHECKSUM_UTILS" ]; then
+        compare_files "$src" "$dst" >/dev/null 2>&1
+        return $?
+    else
+        # Fallback: compare file sizes
+        local src_size=$(get_size "$src")
+        local dst_size=$(get_size "$dst")
+        [ "$src_size" = "$dst_size" ]
+        return $?
+    fi
+}
+
+time_with_integrity() {
+    local cmd="$1"
+    local label="$2"
+    local src="$3"
+    local dst="$4"
+    local timeout_seconds="${5:-300}"
+    
+    local copy_time=$(time_command "$cmd" "$label" "$timeout_seconds")
+    local verify_start=$(date +%s.%N)
+    verify_integrity "$src" "$dst" >/dev/null 2>&1
+    local verify_end=$(date +%s.%N)
+    local verify_time=$(echo "$verify_end - $verify_start" | bc)
+    local total_time=$(echo "$copy_time + $verify_time" | bc)
+    
+    echo "$copy_time|$verify_time|$total_time"
+}
+
 format_size() {
     local bytes=$1
     if [ "$bytes" -gt 1073741824 ]; then
@@ -150,32 +194,67 @@ benchmark_large_file() {
     
     rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
     
+    # Without integrity check
     local cp_time=$(time_command "cp '$src' '$BENCH_DIR/dest/large_file_cp.bin'" "cp")
     local cp_speed=$(echo "scale=2; $size / $cp_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}cp:${NC} ${cp_time}s (${cp_speed} MB/s)"
+    echo -e "${GREEN}cp (no check):${NC} ${cp_time}s (${cp_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
-    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/large_file_rsync.bin'" "rsync")
+    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/large_file_rsync.bin'" "rsync (no check)")
     local rsync_speed=$(echo "scale=2; $size / $rsync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}rsync:${NC} ${rsync_time}s (${rsync_speed} MB/s)"
+    echo -e "${GREEN}rsync (no check):${NC} ${rsync_time}s (${rsync_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
-    local usync_time=$(time_command "'$BINARY' '$src' '$BENCH_DIR/dest/large_file_usync.bin'" "usync (regular)")
+    local usync_time=$(time_command "'$BINARY' '$src' '$BENCH_DIR/dest/large_file_usync.bin'" "usync (no check)")
     local usync_speed=$(echo "scale=2; $size / $usync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync (regular):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    echo -e "${GREEN}usync (no check):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    
+    # With integrity check
+    rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
+    local cp_result=$(time_with_integrity "cp '$src' '$BENCH_DIR/dest/large_file_cp_check.bin'" "cp (with check)" "$src" "$BENCH_DIR/dest/large_file_cp_check.bin")
+    local cp_copy_time=$(echo "$cp_result" | cut -d'|' -f1)
+    local cp_verify_time=$(echo "$cp_result" | cut -d'|' -f2)
+    local cp_total_time=$(echo "$cp_result" | cut -d'|' -f3)
+    local cp_check_speed=$(echo "scale=2; $size / $cp_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}cp (with check):${NC} ${cp_total_time}s (${cp_check_speed} MB/s) [copy: ${cp_copy_time}s, verify: ${cp_verify_time}s]"
     
     rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
-    local usync_ram_time=$(time_command "'$BINARY' --ram '$src' '$BENCH_DIR/dest/large_file_usync_ram.bin'" "usync (RAM)")
-    local usync_ram_speed=$(echo "scale=2; $size / $usync_ram_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync (RAM):${NC} ${usync_ram_time}s (${usync_ram_speed} MB/s)"
+    local rsync_result=$(time_with_integrity "rsync -aq '$src' '$BENCH_DIR/dest/large_file_rsync_check.bin'" "rsync (with check)" "$src" "$BENCH_DIR/dest/large_file_rsync_check.bin")
+    local rsync_copy_time=$(echo "$rsync_result" | cut -d'|' -f1)
+    local rsync_verify_time=$(echo "$rsync_result" | cut -d'|' -f2)
+    local rsync_total_time=$(echo "$rsync_result" | cut -d'|' -f3)
+    local rsync_check_speed=$(echo "scale=2; $size / $rsync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}rsync (with check):${NC} ${rsync_total_time}s (${rsync_check_speed} MB/s) [copy: ${rsync_copy_time}s, verify: ${rsync_verify_time}s]"
     
-    echo ""
-    echo "Large File Copy ($size_human):" >> "$RESULTS_FILE"
-    echo "  cp: ${cp_time}s (${cp_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  rsync: ${rsync_time}s (${rsync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync (regular): ${usync_time}s (${usync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync (RAM): ${usync_ram_time}s (${usync_ram_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "" >> "$RESULTS_FILE"
+    rm -rf "$BENCH_DIR/dest"/* 2>/dev/null || true
+    local usync_result=$(time_with_integrity "'$BINARY' '$src' '$BENCH_DIR/dest/large_file_usync_check.bin'" "usync (with check)" "$src" "$BENCH_DIR/dest/large_file_usync_check.bin")
+    local usync_copy_time=$(echo "$usync_result" | cut -d'|' -f1)
+    local usync_verify_time=$(echo "$usync_result" | cut -d'|' -f2)
+    local usync_total_time=$(echo "$usync_result" | cut -d'|' -f3)
+    local usync_check_speed=$(echo "scale=2; $size / $usync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}usync (with check):${NC} ${usync_total_time}s (${usync_check_speed} MB/s) [copy: ${usync_copy_time}s, verify: ${usync_verify_time}s]"
+    
+    # Store results
+    {
+        echo "Large File Copy ($size_human):"
+        echo "  cp (no check): ${cp_time}s (${cp_speed} MB/s)"
+        echo "  cp (with check): ${cp_total_time}s (${cp_check_speed} MB/s)"
+        echo "  rsync (no check): ${rsync_time}s (${rsync_speed} MB/s)"
+        echo "  rsync (with check): ${rsync_total_time}s (${rsync_check_speed} MB/s)"
+        echo "  usync (no check): ${usync_time}s (${usync_speed} MB/s)"
+        echo "  usync (with check): ${usync_total_time}s (${usync_check_speed} MB/s)"
+        echo ""
+    } >> "$RESULTS_FILE"
+    
+    # Store for markdown table
+    BENCH_LARGE_FILE=(
+        "cp|no check|${cp_time}|${cp_speed}"
+        "cp|with check|${cp_total_time}|${cp_check_speed}"
+        "rsync|no check|${rsync_time}|${rsync_speed}"
+        "rsync|with check|${rsync_total_time}|${rsync_check_speed}"
+        "usync|no check|${usync_time}|${usync_speed}"
+        "usync|with check|${usync_total_time}|${usync_check_speed}"
+    )
 }
 
 benchmark_directory() {
@@ -191,32 +270,67 @@ benchmark_directory() {
     
     rm -rf "$BENCH_DIR/dest/test_dir"*
     
-    local cp_time=$(time_command "cp -r '$src' '$BENCH_DIR/dest/test_dir_cp'" "cp -r")
+    # Without integrity check
+    local cp_time=$(time_command "cp -r '$src' '$BENCH_DIR/dest/test_dir_cp'" "cp -r (no check)")
     local cp_speed=$(echo "scale=2; $size / $cp_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}cp -r:${NC} ${cp_time}s (${cp_speed} MB/s)"
+    echo -e "${GREEN}cp -r (no check):${NC} ${cp_time}s (${cp_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest/test_dir"*
-    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/test_dir_rsync'" "rsync")
+    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/test_dir_rsync'" "rsync (no check)")
     local rsync_speed=$(echo "scale=2; $size / $rsync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}rsync:${NC} ${rsync_time}s (${rsync_speed} MB/s)"
+    echo -e "${GREEN}rsync (no check):${NC} ${rsync_time}s (${rsync_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest/test_dir"*
-    local usync_time=$(time_command "'$BINARY' -r '$src' '$BENCH_DIR/dest/test_dir_usync'" "usync -r (regular)")
+    local usync_time=$(time_command "'$BINARY' -r '$src' '$BENCH_DIR/dest/test_dir_usync'" "usync -r (no check)")
     local usync_speed=$(echo "scale=2; $size / $usync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync -r (regular):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    echo -e "${GREEN}usync -r (no check):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    
+    # With integrity check (sample first file)
+    rm -rf "$BENCH_DIR/dest/test_dir"*
+    local cp_result=$(time_with_integrity "cp -r '$src' '$BENCH_DIR/dest/test_dir_cp_check'" "cp -r (with check)" "$src/file_1.bin" "$BENCH_DIR/dest/test_dir_cp_check/file_1.bin")
+    local cp_copy_time=$(echo "$cp_result" | cut -d'|' -f1)
+    local cp_verify_time=$(echo "$cp_result" | cut -d'|' -f2)
+    local cp_total_time=$(echo "$cp_result" | cut -d'|' -f3)
+    local cp_check_speed=$(echo "scale=2; $size / $cp_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}cp -r (with check):${NC} ${cp_total_time}s (${cp_check_speed} MB/s) [copy: ${cp_copy_time}s, verify: ${cp_verify_time}s]"
     
     rm -rf "$BENCH_DIR/dest/test_dir"*
-    local usync_ram_time=$(time_command "'$BINARY' -r --ram '$src' '$BENCH_DIR/dest/test_dir_usync_ram'" "usync -r (RAM)")
-    local usync_ram_speed=$(echo "scale=2; $size / $usync_ram_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync -r (RAM):${NC} ${usync_ram_time}s (${usync_ram_speed} MB/s)"
+    local rsync_result=$(time_with_integrity "rsync -aq '$src' '$BENCH_DIR/dest/test_dir_rsync_check'" "rsync (with check)" "$src/file_1.bin" "$BENCH_DIR/dest/test_dir_rsync_check/file_1.bin")
+    local rsync_copy_time=$(echo "$rsync_result" | cut -d'|' -f1)
+    local rsync_verify_time=$(echo "$rsync_result" | cut -d'|' -f2)
+    local rsync_total_time=$(echo "$rsync_result" | cut -d'|' -f3)
+    local rsync_check_speed=$(echo "scale=2; $size / $rsync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}rsync (with check):${NC} ${rsync_total_time}s (${rsync_check_speed} MB/s) [copy: ${rsync_copy_time}s, verify: ${rsync_verify_time}s]"
     
-    echo ""
-    echo "Directory Copy ($size_human, ${NUM_FILES} files):" >> "$RESULTS_FILE"
-    echo "  cp -r: ${cp_time}s (${cp_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  rsync: ${rsync_time}s (${rsync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync -r (regular): ${usync_time}s (${usync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync -r (RAM): ${usync_ram_time}s (${usync_ram_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "" >> "$RESULTS_FILE"
+    rm -rf "$BENCH_DIR/dest/test_dir"*
+    local usync_result=$(time_with_integrity "'$BINARY' -r '$src' '$BENCH_DIR/dest/test_dir_usync_check'" "usync -r (with check)" "$src/file_1.bin" "$BENCH_DIR/dest/test_dir_usync_check/file_1.bin")
+    local usync_copy_time=$(echo "$usync_result" | cut -d'|' -f1)
+    local usync_verify_time=$(echo "$usync_result" | cut -d'|' -f2)
+    local usync_total_time=$(echo "$usync_result" | cut -d'|' -f3)
+    local usync_check_speed=$(echo "scale=2; $size / $usync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}usync -r (with check):${NC} ${usync_total_time}s (${usync_check_speed} MB/s) [copy: ${usync_copy_time}s, verify: ${usync_verify_time}s]"
+    
+    # Store results
+    {
+        echo "Directory Copy ($size_human, ${NUM_FILES} files):"
+        echo "  cp -r (no check): ${cp_time}s (${cp_speed} MB/s)"
+        echo "  cp -r (with check): ${cp_total_time}s (${cp_check_speed} MB/s)"
+        echo "  rsync (no check): ${rsync_time}s (${rsync_speed} MB/s)"
+        echo "  rsync (with check): ${rsync_total_time}s (${rsync_check_speed} MB/s)"
+        echo "  usync -r (no check): ${usync_time}s (${usync_speed} MB/s)"
+        echo "  usync -r (with check): ${usync_total_time}s (${usync_check_speed} MB/s)"
+        echo ""
+    } >> "$RESULTS_FILE"
+    
+    # Store for markdown table
+    BENCH_DIRECTORY=(
+        "cp -r|no check|${cp_time}|${cp_speed}"
+        "cp -r|with check|${cp_total_time}|${cp_check_speed}"
+        "rsync|no check|${rsync_time}|${rsync_speed}"
+        "rsync|with check|${rsync_total_time}|${rsync_check_speed}"
+        "usync -r|no check|${usync_time}|${usync_speed}"
+        "usync -r|with check|${usync_total_time}|${usync_check_speed}"
+    )
 }
 
 benchmark_nested() {
@@ -232,32 +346,70 @@ benchmark_nested() {
     
     rm -rf "$BENCH_DIR/dest/nested_dir"*
     
-    local cp_time=$(time_command "cp -r '$src' '$BENCH_DIR/dest/nested_dir_cp'" "cp -r")
+    # Without integrity check
+    local cp_time=$(time_command "cp -r '$src' '$BENCH_DIR/dest/nested_dir_cp'" "cp -r (no check)")
     local cp_speed=$(echo "scale=2; $size / $cp_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}cp -r:${NC} ${cp_time}s (${cp_speed} MB/s)"
+    echo -e "${GREEN}cp -r (no check):${NC} ${cp_time}s (${cp_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest/nested_dir"*
-    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/nested_dir_rsync'" "rsync")
+    local rsync_time=$(time_command "rsync -aq '$src' '$BENCH_DIR/dest/nested_dir_rsync'" "rsync (no check)")
     local rsync_speed=$(echo "scale=2; $size / $rsync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}rsync:${NC} ${rsync_time}s (${rsync_speed} MB/s)"
+    echo -e "${GREEN}rsync (no check):${NC} ${rsync_time}s (${rsync_speed} MB/s)"
     
     rm -rf "$BENCH_DIR/dest/nested_dir"*
-    local usync_time=$(time_command "'$BINARY' -r '$src' '$BENCH_DIR/dest/nested_dir_usync'" "usync -r (regular)")
+    local usync_time=$(time_command "'$BINARY' -r '$src' '$BENCH_DIR/dest/nested_dir_usync'" "usync -r (no check)")
     local usync_speed=$(echo "scale=2; $size / $usync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync -r (regular):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    echo -e "${GREEN}usync -r (no check):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    
+    # With integrity check (sample one file)
+    local sample_file=$(find "$src" -type f | head -n1)
+    local sample_rel="${sample_file#$src/}"
     
     rm -rf "$BENCH_DIR/dest/nested_dir"*
-    local usync_ram_time=$(time_command "'$BINARY' -r --ram '$src' '$BENCH_DIR/dest/nested_dir_usync_ram'" "usync -r (RAM)")
-    local usync_ram_speed=$(echo "scale=2; $size / $usync_ram_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync -r (RAM):${NC} ${usync_ram_time}s (${usync_ram_speed} MB/s)"
+    local cp_result=$(time_with_integrity "cp -r '$src' '$BENCH_DIR/dest/nested_dir_cp_check'" "cp -r (with check)" "$sample_file" "$BENCH_DIR/dest/nested_dir_cp_check/$sample_rel")
+    local cp_copy_time=$(echo "$cp_result" | cut -d'|' -f1)
+    local cp_verify_time=$(echo "$cp_result" | cut -d'|' -f2)
+    local cp_total_time=$(echo "$cp_result" | cut -d'|' -f3)
+    local cp_check_speed=$(echo "scale=2; $size / $cp_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}cp -r (with check):${NC} ${cp_total_time}s (${cp_check_speed} MB/s) [copy: ${cp_copy_time}s, verify: ${cp_verify_time}s]"
     
-    echo ""
-    echo "Nested Directory Copy ($size_human):" >> "$RESULTS_FILE"
-    echo "  cp -r: ${cp_time}s (${cp_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  rsync: ${rsync_time}s (${rsync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync -r (regular): ${usync_time}s (${usync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "  usync -r (RAM): ${usync_ram_time}s (${usync_ram_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "" >> "$RESULTS_FILE"
+    rm -rf "$BENCH_DIR/dest/nested_dir"*
+    local rsync_result=$(time_with_integrity "rsync -aq '$src' '$BENCH_DIR/dest/nested_dir_rsync_check'" "rsync (with check)" "$sample_file" "$BENCH_DIR/dest/nested_dir_rsync_check/$sample_rel")
+    local rsync_copy_time=$(echo "$rsync_result" | cut -d'|' -f1)
+    local rsync_verify_time=$(echo "$rsync_result" | cut -d'|' -f2)
+    local rsync_total_time=$(echo "$rsync_result" | cut -d'|' -f3)
+    local rsync_check_speed=$(echo "scale=2; $size / $rsync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}rsync (with check):${NC} ${rsync_total_time}s (${rsync_check_speed} MB/s) [copy: ${rsync_copy_time}s, verify: ${rsync_verify_time}s]"
+    
+    rm -rf "$BENCH_DIR/dest/nested_dir"*
+    local usync_result=$(time_with_integrity "'$BINARY' -r '$src' '$BENCH_DIR/dest/nested_dir_usync_check'" "usync -r (with check)" "$sample_file" "$BENCH_DIR/dest/nested_dir_usync_check/$sample_rel")
+    local usync_copy_time=$(echo "$usync_result" | cut -d'|' -f1)
+    local usync_verify_time=$(echo "$usync_result" | cut -d'|' -f2)
+    local usync_total_time=$(echo "$usync_result" | cut -d'|' -f3)
+    local usync_check_speed=$(echo "scale=2; $size / $usync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}usync -r (with check):${NC} ${usync_total_time}s (${usync_check_speed} MB/s) [copy: ${usync_copy_time}s, verify: ${usync_verify_time}s]"
+    
+    # Store results
+    {
+        echo "Nested Directory Copy ($size_human):"
+        echo "  cp -r (no check): ${cp_time}s (${cp_speed} MB/s)"
+        echo "  cp -r (with check): ${cp_total_time}s (${cp_check_speed} MB/s)"
+        echo "  rsync (no check): ${rsync_time}s (${rsync_speed} MB/s)"
+        echo "  rsync (with check): ${rsync_total_time}s (${rsync_check_speed} MB/s)"
+        echo "  usync -r (no check): ${usync_time}s (${usync_speed} MB/s)"
+        echo "  usync -r (with check): ${usync_total_time}s (${usync_check_speed} MB/s)"
+        echo ""
+    } >> "$RESULTS_FILE"
+    
+    # Store for markdown table
+    BENCH_NESTED=(
+        "cp -r|no check|${cp_time}|${cp_speed}"
+        "cp -r|with check|${cp_total_time}|${cp_check_speed}"
+        "rsync|no check|${rsync_time}|${rsync_speed}"
+        "rsync|with check|${rsync_total_time}|${rsync_check_speed}"
+        "usync -r|no check|${usync_time}|${usync_speed}"
+        "usync -r|with check|${usync_total_time}|${usync_check_speed}"
+    )
 }
 
 benchmark_remote() {
@@ -278,37 +430,168 @@ benchmark_remote() {
     local size=$(get_size "$src")
     local size_human=$(format_size "$size")
     local remote_path="/tmp/benchmark_medium_file.bin"
+    local local_dest="$BENCH_DIR/dest/medium_file_remote.bin"
     
     echo "File size: $size_human"
     echo ""
     
-    local scp_time=$(time_command "scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no '$src' '$REMOTE_HOST:$remote_path'" "scp" 60)
+    # Without integrity check
+    local scp_time=$(time_command "scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no '$src' '$REMOTE_HOST:$remote_path'" "scp (no check)" 60)
     local scp_speed=$(echo "scale=2; $size / $scp_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}scp:${NC} ${scp_time}s (${scp_speed} MB/s)"
+    echo -e "${GREEN}scp (no check):${NC} ${scp_time}s (${scp_speed} MB/s)"
     
     ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
     
+    local rsync_time=""
+    local rsync_speed=""
     if command -v rsync &> /dev/null; then
-        local rsync_time=$(time_command "rsync -aq -e 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no' '$src' '$REMOTE_HOST:$remote_path'" "rsync" 60)
-        local rsync_speed=$(echo "scale=2; $size / $rsync_time / 1048576" | bc 2>/dev/null || echo "0")
-        echo -e "${GREEN}rsync:${NC} ${rsync_time}s (${rsync_speed} MB/s)"
+        rsync_time=$(time_command "rsync -aq -e 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no' '$src' '$REMOTE_HOST:$remote_path'" "rsync (no check)" 60)
+        rsync_speed=$(echo "scale=2; $size / $rsync_time / 1048576" | bc 2>/dev/null || echo "0")
+        echo -e "${GREEN}rsync (no check):${NC} ${rsync_time}s (${rsync_speed} MB/s)"
         ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
     fi
     
-    local usync_time=$(time_command "'$BINARY' '$src' '$REMOTE_HOST:$remote_path'" "usync (regular)" 60)
+    local usync_time=$(time_command "'$BINARY' '$src' '$REMOTE_HOST:$remote_path'" "usync (no check)" 60)
     local usync_speed=$(echo "scale=2; $size / $usync_time / 1048576" | bc 2>/dev/null || echo "0")
-    echo -e "${GREEN}usync (regular):${NC} ${usync_time}s (${usync_speed} MB/s)"
+    echo -e "${GREEN}usync (no check):${NC} ${usync_time}s (${usync_speed} MB/s)"
     
     ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
     
-    echo ""
-    echo "Remote File Copy ($size_human):" >> "$RESULTS_FILE"
-    echo "  scp: ${scp_time}s (${scp_speed} MB/s)" >> "$RESULTS_FILE"
+    # With integrity check (upload, then download back and verify)
+    local scp_upload_time=$(time_command "scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no '$src' '$REMOTE_HOST:$remote_path'" "scp upload" 60)
+    local scp_download_time=$(time_command "scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no '$REMOTE_HOST:$remote_path' '$local_dest'" "scp download" 60)
+    local verify_start=$(date +%s.%N)
+    verify_integrity "$src" "$local_dest" >/dev/null 2>&1
+    local verify_end=$(date +%s.%N)
+    local scp_verify_time=$(echo "$verify_end - $verify_start" | bc)
+    local scp_total_time=$(echo "$scp_upload_time + $scp_download_time + $scp_verify_time" | bc)
+    local scp_check_speed=$(echo "scale=2; $size / $scp_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}scp (with check):${NC} ${scp_total_time}s (${scp_check_speed} MB/s) [upload: ${scp_upload_time}s, download: ${scp_download_time}s, verify: ${scp_verify_time}s]"
+    
+    ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
+    rm -f "$local_dest"
+    
+    local rsync_upload_time=""
+    local rsync_download_time=""
+    local rsync_verify_time=""
+    local rsync_total_time=""
+    local rsync_check_speed=""
     if command -v rsync &> /dev/null; then
-        echo "  rsync: ${rsync_time}s (${rsync_speed} MB/s)" >> "$RESULTS_FILE"
+        rsync_upload_time=$(time_command "rsync -aq -e 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no' '$src' '$REMOTE_HOST:$remote_path'" "rsync upload" 60)
+        rsync_download_time=$(time_command "rsync -aq -e 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no' '$REMOTE_HOST:$remote_path' '$local_dest'" "rsync download" 60)
+        verify_start=$(date +%s.%N)
+        verify_integrity "$src" "$local_dest" >/dev/null 2>&1
+        verify_end=$(date +%s.%N)
+        rsync_verify_time=$(echo "$verify_end - $verify_start" | bc)
+        rsync_total_time=$(echo "$rsync_upload_time + $rsync_download_time + $rsync_verify_time" | bc)
+        rsync_check_speed=$(echo "scale=2; $size / $rsync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+        echo -e "${GREEN}rsync (with check):${NC} ${rsync_total_time}s (${rsync_check_speed} MB/s) [upload: ${rsync_upload_time}s, download: ${rsync_download_time}s, verify: ${rsync_verify_time}s]"
+        ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
+        rm -f "$local_dest"
     fi
-    echo "  usync (regular): ${usync_time}s (${usync_speed} MB/s)" >> "$RESULTS_FILE"
-    echo "" >> "$RESULTS_FILE"
+    
+    local usync_upload_time=$(time_command "'$BINARY' '$src' '$REMOTE_HOST:$remote_path'" "usync upload" 60)
+    local usync_download_time=$(time_command "'$BINARY' '$REMOTE_HOST:$remote_path' '$local_dest'" "usync download" 60)
+    verify_start=$(date +%s.%N)
+    verify_integrity "$src" "$local_dest" >/dev/null 2>&1
+    verify_end=$(date +%s.%N)
+    local usync_verify_time=$(echo "$verify_end - $verify_start" | bc)
+    local usync_total_time=$(echo "$usync_upload_time + $usync_download_time + $usync_verify_time" | bc)
+    local usync_check_speed=$(echo "scale=2; $size / $usync_total_time / 1048576" | bc 2>/dev/null || echo "0")
+    echo -e "${GREEN}usync (with check):${NC} ${usync_total_time}s (${usync_check_speed} MB/s) [upload: ${usync_upload_time}s, download: ${usync_download_time}s, verify: ${usync_verify_time}s]"
+    
+    ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$REMOTE_HOST" "rm -f $remote_path" >/dev/null 2>&1 || true
+    rm -f "$local_dest"
+    
+    # Store results
+    {
+        echo "Remote File Copy ($size_human):"
+        echo "  scp (no check): ${scp_time}s (${scp_speed} MB/s)"
+        echo "  scp (with check): ${scp_total_time}s (${scp_check_speed} MB/s)"
+        if [ -n "$rsync_time" ]; then
+            echo "  rsync (no check): ${rsync_time}s (${rsync_speed} MB/s)"
+            echo "  rsync (with check): ${rsync_total_time}s (${rsync_check_speed} MB/s)"
+        fi
+        echo "  usync (no check): ${usync_time}s (${usync_speed} MB/s)"
+        echo "  usync (with check): ${usync_total_time}s (${usync_check_speed} MB/s)"
+        echo ""
+    } >> "$RESULTS_FILE"
+    
+    # Store for markdown table
+    BENCH_REMOTE=(
+        "scp|no check|${scp_time}|${scp_speed}"
+        "scp|with check|${scp_total_time}|${scp_check_speed}"
+    )
+    if [ -n "$rsync_time" ]; then
+        BENCH_REMOTE+=(
+            "rsync|no check|${rsync_time}|${rsync_speed}"
+            "rsync|with check|${rsync_total_time}|${rsync_check_speed}"
+        )
+    fi
+    BENCH_REMOTE+=(
+        "usync|no check|${usync_time}|${usync_speed}"
+        "usync|with check|${usync_total_time}|${usync_check_speed}"
+    )
+}
+
+generate_markdown_table() {
+    {
+        echo "# usync Performance Comparison Results"
+        echo ""
+        echo "## System Information"
+        echo ""
+        cat "$RESULTS_FILE" | grep -A 10 "System Information:" | sed 's/^/  /'
+        echo ""
+        echo "## Benchmark Results"
+        echo ""
+        echo "### Large File Copy"
+        echo ""
+        echo "| Tool | Integrity Check | Time (s) | Speed (MB/s) |"
+        echo "|------|----------------|----------|--------------|"
+        if [ ${#BENCH_LARGE_FILE[@]} -gt 0 ]; then
+            for entry in "${BENCH_LARGE_FILE[@]}"; do
+                IFS='|' read -r tool check time speed <<< "$entry"
+                echo "| $tool | $check | $time | $speed |"
+            done
+        fi
+        echo ""
+        echo "### Directory Copy"
+        echo ""
+        echo "| Tool | Integrity Check | Time (s) | Speed (MB/s) |"
+        echo "|------|----------------|----------|--------------|"
+        if [ ${#BENCH_DIRECTORY[@]} -gt 0 ]; then
+            for entry in "${BENCH_DIRECTORY[@]}"; do
+                IFS='|' read -r tool check time speed <<< "$entry"
+                echo "| $tool | $check | $time | $speed |"
+            done
+        fi
+        echo ""
+        echo "### Nested Directory Copy"
+        echo ""
+        echo "| Tool | Integrity Check | Time (s) | Speed (MB/s) |"
+        echo "|------|----------------|----------|--------------|"
+        if [ ${#BENCH_NESTED[@]} -gt 0 ]; then
+            for entry in "${BENCH_NESTED[@]}"; do
+                IFS='|' read -r tool check time speed <<< "$entry"
+                echo "| $tool | $check | $time | $speed |"
+            done
+        fi
+        if [ ${#BENCH_REMOTE[@]} -gt 0 ] 2>/dev/null; then
+            echo ""
+            echo "### Remote File Copy (SSH)"
+            echo ""
+            echo "| Tool | Integrity Check | Time (s) | Speed (MB/s) |"
+            echo "|------|----------------|----------|--------------|"
+            for entry in "${BENCH_REMOTE[@]}"; do
+                IFS='|' read -r tool check time speed <<< "$entry"
+                echo "| $tool | $check | $time | $speed |"
+            done
+        fi
+        echo ""
+        echo "---"
+        echo ""
+        echo "**Note:** usync does not automatically verify file integrity after copy operations (unlike rsync), which explains the speed advantage. For critical transfers, users should manually verify checksums when needed."
+    } > "$RESULTS_MD"
 }
 
 main() {
@@ -317,6 +600,12 @@ main() {
         echo "Install with: brew install bc (macOS) or apt-get install bc (Linux)"
         exit 1
     fi
+    
+    # Initialize arrays
+    BENCH_LARGE_FILE=()
+    BENCH_DIRECTORY=()
+    BENCH_NESTED=()
+    BENCH_REMOTE=()
     
     echo "usync Performance Comparison Results" > "$RESULTS_FILE"
     echo "========================================" >> "$RESULTS_FILE"
@@ -336,13 +625,18 @@ main() {
         benchmark_remote || echo -e "${RED}Remote benchmark skipped (SSH not available)${NC}"
     fi
     
+    generate_markdown_table
+    
     echo ""
     echo -e "${BLUE}=== Benchmark Complete ===${NC}"
     echo ""
-    echo -e "${GREEN}Results saved to: $RESULTS_FILE${NC}"
+    echo -e "${GREEN}Results saved to:${NC}"
+    echo "  - Text: $RESULTS_FILE"
+    echo "  - Markdown: $RESULTS_MD"
     echo ""
-    echo "Summary:"
-    cat "$RESULTS_FILE"
+    echo -e "${BLUE}=== Markdown Table ===${NC}"
+    echo ""
+    cat "$RESULTS_MD"
 }
 
 main "$@"
