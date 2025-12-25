@@ -27,18 +27,25 @@ Thank you for your interest in contributing to usync! This document provides gui
 
 ### Submitting Changes
 
-**Important**: Direct pushes to `main` are **not allowed**, even for maintainers. All changes must go through Pull Requests from forks.
+**Important**: Direct pushes to `main` are **not allowed**, even for maintainers. All changes must go through Pull Requests from branches (either from forks or branches in the main repository).
 
-1. **Fork the repository** (required for all contributors, including maintainers)
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/usync.git`
-3. Add upstream: `git remote add upstream https://github.com/BSD-Yassin/usync.git`
-4. Create a feature branch: `git checkout -b feature/amazing-feature`
-5. Make your changes
-6. Add tests for new functionality
-7. Ensure all tests pass: `cargo test`
-8. Commit your changes: `git commit -m 'Add amazing feature'`
-9. Push to your fork: `git push origin feature/amazing-feature`
-10. **Open a Pull Request** from your fork to the main repository
+1. **Option A: Fork the repository** (recommended for external contributors)
+   - Fork the repository on GitHub
+   - Clone your fork: `git clone https://github.com/YOUR_USERNAME/usync.git`
+   - Add upstream: `git remote add upstream https://github.com/BSD-Yassin/usync.git`
+   - Create a feature branch: `git checkout -b feature/amazing-feature`
+   - Push to your fork: `git push origin feature/amazing-feature`
+
+2. **Option B: Create a branch** (for maintainers and collaborators)
+   - Clone the repository: `git clone https://github.com/BSD-Yassin/usync.git`
+   - Create a feature branch: `git checkout -b feature/amazing-feature`
+   - Push to the repository: `git push origin feature/amazing-feature`
+
+3. **Make your changes**
+4. Add tests for new functionality
+5. Ensure all tests pass: `cargo test`
+6. Commit your changes: `git commit -m 'Add amazing feature'`
+7. **Open a Pull Request** from your branch to the main repository
 
 ### Pull Request Requirements
 
