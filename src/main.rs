@@ -10,7 +10,13 @@ use clap::Parser;
 
 use copy::copy_with_options;
 use protocol::parse_path;
+use operations::sync::SyncStats;
 use std::fs;
+
+enum SyncResult {
+    Copy(copy::CopyStats),
+    Sync(SyncStats),
+}
 
 #[cfg(feature = "color")]
 use colored::*;
@@ -140,6 +146,10 @@ struct Args {
     /// Dry-run mode: show what would be copied without actually copying
     #[arg(long = "dry-run")]
     dry_run: bool,
+
+    /// Sync mode: only copy changed/new files (one-way sync)
+    #[arg(long = "sync")]
+    sync: bool,
 }
 
 fn main() {
@@ -268,17 +278,32 @@ fn main() {
         }
     }
 
-    match copy_with_options(
-        &src_path,
-        &dst_path,
-        verbose,
-        &ssh_opts,
-        show_progress,
-        args.use_ram,
-        checksum_algorithm,
-        dry_run,
-    ) {
-        Ok(stats) => {
+    let result: Result<SyncResult, copy::CopyError> = if args.sync {
+        copy::sync_with_options(
+            &src_path,
+            &dst_path,
+            verbose,
+            &ssh_opts,
+            show_progress,
+            args.use_ram,
+            checksum_algorithm,
+            dry_run,
+        ).map(|stats| SyncResult::Sync(stats))
+    } else {
+        copy_with_options(
+            &src_path,
+            &dst_path,
+            verbose,
+            &ssh_opts,
+            show_progress,
+            args.use_ram,
+            checksum_algorithm,
+            dry_run,
+        ).map(|stats| SyncResult::Copy(stats))
+    };
+
+    match result {
+        Ok(SyncResult::Copy(_)) | Ok(SyncResult::Sync(_)) => {
             if args.move_files {
                 match delete_source(&src_path, verbose) {
                     Ok(()) => {
@@ -335,7 +360,18 @@ fn main() {
                 println!("Successfully copied {} to {}", src_str, dst_str);
             }
             if verbose || show_progress {
-                stats.print_summary(verbose);
+                match &result {
+                    Ok(SyncResult::Copy(stats)) => stats.print_summary(verbose),
+                    Ok(SyncResult::Sync(stats)) => {
+                        println!("\n=== Sync Summary ===");
+                        println!("Files copied: {}", stats.files_copied);
+                        println!("Bytes copied: {} ({:.2} MB)", 
+                            stats.bytes_copied,
+                            stats.bytes_copied as f64 / 1_048_576.0);
+                        println!("Files deleted: {}", stats.files_deleted);
+                    }
+                    _ => {}
+                }
             }
         }
         Err(e) => {

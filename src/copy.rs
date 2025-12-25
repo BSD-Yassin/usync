@@ -1096,6 +1096,117 @@ fn copy_directory_recursive_impl(
     Ok(())
 }
 
+pub fn sync_with_options(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+) -> Result<crate::operations::sync::SyncStats, CopyError> {
+    use crate::operations::sync::{SyncOperation, SyncMode};
+    use crate::backend::traits::CopyOptions;
+    
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+        dry_run,
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            let src_str = match src {
+                ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+                ProtocolPath::Remote(remote) => remote.url.to_string(),
+            };
+
+            let dst_str = match dst {
+                ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
+                ProtocolPath::Remote(remote) => remote.url.to_string(),
+            };
+
+            let (src_backend_box, dst_backend_box) = match (create_backend(src), create_backend(dst)) {
+                (Ok(src_b), Ok(dst_b)) => {
+                    let src_box: Box<dyn Backend> = match src_b {
+                        BackendInstance::Local(_) => Box::new(crate::backend::local::LocalBackend::new()),
+                        BackendInstance::Ssh(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::ssh::SshBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for SSH".to_string()));
+                            }
+                        }
+                        BackendInstance::S3(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::s3::S3Backend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for S3".to_string()));
+                            }
+                        }
+                        BackendInstance::Http(_) => {
+                            if let ProtocolPath::Remote(rp) = src {
+                                Box::new(crate::backend::cli::http::HttpBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for HTTP".to_string()));
+                            }
+                        }
+                    };
+                    
+                    let dst_box: Box<dyn Backend> = match dst_b {
+                        BackendInstance::Local(_) => Box::new(crate::backend::local::LocalBackend::new()),
+                        BackendInstance::Ssh(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::ssh::SshBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for SSH".to_string()));
+                            }
+                        }
+                        BackendInstance::S3(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::s3::S3Backend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for S3".to_string()));
+                            }
+                        }
+                        BackendInstance::Http(_) => {
+                            if let ProtocolPath::Remote(rp) = dst {
+                                Box::new(crate::backend::cli::http::HttpBackend::new(rp.clone()))
+                            } else {
+                                return Err(CopyError::InvalidSource("Expected remote path for HTTP".to_string()));
+                            }
+                        }
+                    };
+                    (src_box, dst_box)
+                }
+                _ => return Err(CopyError::UnsupportedProtocol(
+                    "Sync requires backend support for both source and destination".to_string(),
+                ))
+            };
+
+            let sync_op = SyncOperation::new(
+                src_backend_box,
+                dst_backend_box,
+                SyncMode::OneWay,
+                opts,
+            );
+
+            sync_op.sync(&src_str, &dst_str)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Sync failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })
+        }
+        _ => Err(CopyError::UnsupportedProtocol(
+            "Sync requires backend support for both source and destination".to_string(),
+        ))
+    }
+}
+
 #[derive(Debug)]
 pub enum CopyError {
     SourceNotFound(String),
