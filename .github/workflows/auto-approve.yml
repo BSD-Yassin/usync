@@ -1,0 +1,34 @@
+name: Auto-approve PRs from maintainer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-approve:
+    name: Auto-approve maintainer PRs
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == github.repository_owner
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+    - name: Auto-approve PR from repository owner
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const pr = context.payload.pull_request;
+          if (pr.user.login === context.repo.owner) {
+            github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              event: 'APPROVE',
+              body: '✅ Auto-approved: PR from repository owner/maintainer'
+            });
+            console.log(`Auto-approved PR #${pr.number} from ${pr.user.login}`);
+          } else {
+            console.log(`Skipping auto-approval: PR from ${pr.user.login}, not repository owner`);
+          }
