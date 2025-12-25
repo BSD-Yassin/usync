@@ -364,12 +364,15 @@ pub fn copy_from_s3_to_file(
     progress: bool,
 ) -> Result<(), RemoteCopyError> {
     let s3_url = src.url.to_string();
-    
+
     // Check if URL contains wildcards - if so, use sync instead
     let has_wildcard = s3_url.contains('*') || s3_url.contains('?');
-    
-    if has_wildcard {
-        // For wildcards, use sync to download multiple files
+
+    // Check if URL ends with / (directory) - use sync for directories
+    let is_directory = s3_url.ends_with('/') || src.path.ends_with('/');
+
+    if has_wildcard || is_directory {
+        // For wildcards or directories, use sync to download multiple files
         return copy_from_s3_with_wildcard(&s3_url, dst_path, verbose, progress);
     }
 
@@ -399,7 +402,7 @@ pub fn copy_from_s3_to_file(
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let aws_error = stderr.trim();
-            
+
             // If SDK is available, try fallback
             #[cfg(feature = "s3-sdk")]
             {
@@ -409,7 +412,7 @@ pub fn copy_from_s3_to_file(
                 }
                 return copy_from_s3_to_file_sdk(src, dst_path, verbose, progress);
             }
-            
+
             // No SDK, return AWS error
             #[cfg(not(feature = "s3-sdk"))]
             {
@@ -436,10 +439,10 @@ pub fn copy_from_s3_to_file(
 
     #[cfg(not(feature = "s3-sdk"))]
     {
-        return Err(RemoteCopyError::IoError {
+        Err(RemoteCopyError::IoError {
             message: "AWS CLI not found and SDK feature not enabled".to_string(),
             error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
-        });
+        })
     }
 }
 
@@ -471,7 +474,7 @@ pub fn copy_file_to_s3(
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let aws_error = stderr.trim();
-            
+
             #[cfg(feature = "s3-sdk")]
             {
                 if verbose {
@@ -480,7 +483,7 @@ pub fn copy_file_to_s3(
                 }
                 return copy_file_to_s3_sdk(src_path, dst, verbose, progress);
             }
-            
+
             #[cfg(not(feature = "s3-sdk"))]
             {
                 return Err(RemoteCopyError::IoError {
@@ -506,10 +509,10 @@ pub fn copy_file_to_s3(
 
     #[cfg(not(feature = "s3-sdk"))]
     {
-        return Err(RemoteCopyError::IoError {
+        Err(RemoteCopyError::IoError {
             message: "AWS CLI not found and SDK feature not enabled".to_string(),
             error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
-        });
+        })
     }
 }
 
@@ -541,7 +544,7 @@ pub fn copy_directory_to_s3(
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let aws_error = stderr.trim();
-            
+
             #[cfg(feature = "s3-sdk")]
             {
                 if verbose {
@@ -550,7 +553,7 @@ pub fn copy_directory_to_s3(
                 }
                 return copy_directory_to_s3_sdk(src_path, dst, verbose, progress);
             }
-            
+
             #[cfg(not(feature = "s3-sdk"))]
             {
                 return Err(RemoteCopyError::IoError {
@@ -576,10 +579,10 @@ pub fn copy_directory_to_s3(
 
     #[cfg(not(feature = "s3-sdk"))]
     {
-        return Err(RemoteCopyError::IoError {
+        Err(RemoteCopyError::IoError {
             message: "AWS CLI not found and SDK feature not enabled".to_string(),
             error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
-        });
+        })
     }
 }
 
@@ -598,10 +601,10 @@ fn try_aws_cli(
     }
 
     let mut cmd = Command::new("aws");
-    
+
     // Check if S3 URL contains wildcards - use sync for wildcards, cp for single files
     let has_wildcard = s3_url.contains('*') || s3_url.contains('?');
-    
+
     if has_wildcard && is_download {
         // For wildcards, use sync instead of cp
         cmd.arg("s3").arg("sync");
@@ -619,6 +622,13 @@ fn try_aws_cli(
     // Add region if specified
     if let Ok(region) = std::env::var("AWS_REGION") {
         cmd.arg("--region").arg(&region);
+    }
+
+    // Add endpoint URL if specified (for MinIO and S3-compatible services)
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL_S3") {
+        cmd.arg("--endpoint-url").arg(&endpoint);
+    } else if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        cmd.arg("--endpoint-url").arg(&endpoint);
     }
 
     if progress {
@@ -681,6 +691,13 @@ fn try_aws_cli_sync(
         cmd.arg("--region").arg(&region);
     }
 
+    // Add endpoint URL if specified (for MinIO and S3-compatible services)
+    if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL_S3") {
+        cmd.arg("--endpoint-url").arg(&endpoint);
+    } else if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+        cmd.arg("--endpoint-url").arg(&endpoint);
+    }
+
     if progress {
         // AWS CLI shows progress by default
         if verbose {
@@ -703,7 +720,11 @@ fn copy_from_s3_with_wildcard(
     progress: bool,
 ) -> Result<(), RemoteCopyError> {
     if verbose {
-        println!("Copying from S3 (wildcard): {} to {}", s3_url, dst_path.display());
+        println!(
+            "Copying from S3 (wildcard): {} to {}",
+            s3_url,
+            dst_path.display()
+        );
     }
 
     // Ensure destination is a directory for wildcard downloads
@@ -730,7 +751,7 @@ fn copy_from_s3_with_wildcard(
     };
 
     // Use sync for wildcard patterns
-    if let Ok(mut cmd) = try_aws_cli_sync(&dst_dir, s3_url, verbose, progress) {
+    if let Ok(_cmd) = try_aws_cli_sync(&dst_dir, s3_url, verbose, progress) {
         // For sync, we need to reverse the order: s3_url -> local_path
         // But try_aws_cli_sync does local -> s3, so we need to adjust
         let mut sync_cmd = Command::new("aws");
@@ -742,6 +763,13 @@ fn copy_from_s3_with_wildcard(
 
         if let Ok(region) = std::env::var("AWS_REGION") {
             sync_cmd.arg("--region").arg(&region);
+        }
+
+        // Add endpoint URL if specified (for MinIO and S3-compatible services)
+        if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL_S3") {
+            sync_cmd.arg("--endpoint-url").arg(&endpoint);
+        } else if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+            sync_cmd.arg("--endpoint-url").arg(&endpoint);
         }
 
         if progress {
@@ -768,7 +796,7 @@ fn copy_from_s3_with_wildcard(
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let aws_error = stderr.trim();
-            
+
             #[cfg(feature = "s3-sdk")]
             {
                 if verbose {
@@ -777,7 +805,7 @@ fn copy_from_s3_with_wildcard(
                 }
                 // SDK fallback would go here
             }
-            
+
             #[cfg(not(feature = "s3-sdk"))]
             {
                 return Err(RemoteCopyError::IoError {
@@ -805,10 +833,10 @@ fn copy_from_s3_with_wildcard(
 
     #[cfg(not(feature = "s3-sdk"))]
     {
-        return Err(RemoteCopyError::IoError {
+        Err(RemoteCopyError::IoError {
             message: "AWS CLI not found and SDK feature not enabled".to_string(),
             error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
-        });
+        })
     }
 }
 

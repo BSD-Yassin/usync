@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_parse_s3_url_with_prefix() {
-        let result = parse_path("s3://l-ec1-ctaphost/ctaphost/dt=20250928/file.txt");
+        let result = parse_path("s3://my-bucket/path/dt=20250928/file.txt");
         assert!(matches!(result, Ok(Path::Remote(_))));
         if let Ok(Path::Remote(rp)) = result {
             assert_eq!(rp.protocol, Protocol::S3);

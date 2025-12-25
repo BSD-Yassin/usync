@@ -2,9 +2,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// Get the optimal buffer size based on file size
+#[inline]
 pub fn get_buffer_size(file_size: u64) -> usize {
-    // Use 64KB for files larger than 1MB, 8KB for smaller files
     if file_size > 1_048_576 {
         64 * 1024
     } else {
@@ -12,16 +11,14 @@ pub fn get_buffer_size(file_size: u64) -> usize {
     }
 }
 
-/// Copy file with adaptive buffer size
+#[inline]
 pub fn copy_file_buffered(src: &Path, dst: &Path) -> io::Result<u64> {
     copy_file_buffered_with_resume(src, dst, 0)
 }
 
-/// Copy file with adaptive buffer size and resume support
 pub fn copy_file_buffered_with_resume(src: &Path, dst: &Path, resume_from: u64) -> io::Result<u64> {
     use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
-    // Ensure parent directory exists
     if let Some(parent) = dst.parent() {
         if !parent.exists() {
             fs::create_dir_all(parent)?;
@@ -40,7 +37,6 @@ pub fn copy_file_buffered_with_resume(src: &Path, dst: &Path, resume_from: u64) 
         dst_file.seek(SeekFrom::Start(resume_from))?;
     }
 
-    // Get file size for adaptive buffer
     let file_size = src_file.metadata()?.len();
     let buffer_size = get_buffer_size(file_size);
 
@@ -64,11 +60,9 @@ pub fn copy_file_buffered_with_resume(src: &Path, dst: &Path, resume_from: u64) 
 }
 
 #[cfg(target_os = "linux")]
-/// Zero-copy file transfer using sendfile (Linux only)
 pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
     use std::os::unix::io::{AsRawFd, RawFd};
 
-    // Ensure parent directory exists
     if let Some(parent) = dst.parent() {
         if !parent.exists() {
             fs::create_dir_all(parent)?;
@@ -84,7 +78,6 @@ pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
     let file_size = src_file.metadata()?.len();
     let mut offset: i64 = 0;
 
-    // Use sendfile for zero-copy transfer
     unsafe {
         extern "C" {
             fn sendfile(out_fd: i32, in_fd: i32, offset: *mut i64, count: usize) -> isize;
@@ -98,36 +91,82 @@ pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
     Ok(file_size)
 }
 
-#[cfg(not(target_os = "linux"))]
-/// Fallback for non-Linux systems
-#[allow(dead_code)]
-pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
-    copy_file_buffered(src, dst)
-}
+#[cfg(target_os = "macos")]
+pub fn copy_file_range_macos(src: &Path, dst: &Path) -> io::Result<u64> {
+    use std::ffi::CString;
 
-/// Copy file via RAM (load entire file into memory first)
-/// This can be faster for small files and ensures data integrity
-/// Warning: Uses memory equal to file size, not recommended for very large files
-pub fn copy_file_via_ram(src: &Path, dst: &Path) -> io::Result<u64> {
-    // Ensure parent directory exists
     if let Some(parent) = dst.parent() {
         if !parent.exists() {
             fs::create_dir_all(parent)?;
         }
     }
 
-    // Read entire file into memory
+    let file_size = fs::metadata(src)?.len();
+
+    unsafe {
+        extern "C" {
+            fn copyfile(
+                from: *const i8,
+                to: *const i8,
+                state: *mut std::ffi::c_void,
+                flags: u32,
+            ) -> i32;
+        }
+
+        let src_cstr = match CString::new(src.to_string_lossy().as_ref()) {
+            Ok(s) => s,
+            Err(_) => return copy_file_buffered(src, dst),
+        };
+        let dst_cstr = match CString::new(dst.to_string_lossy().as_ref()) {
+            Ok(s) => s,
+            Err(_) => return copy_file_buffered(src, dst),
+        };
+
+        let result = copyfile(
+            src_cstr.as_ptr(),
+            dst_cstr.as_ptr(),
+            std::ptr::null_mut(),
+            0x0001,
+        );
+
+        if result == 0 {
+            Ok(file_size)
+        } else {
+            copy_file_buffered(src, dst)
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+pub fn copy_file_range_macos(_src: &Path, _dst: &Path) -> io::Result<u64> {
+    copy_file_buffered(_src, _dst)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
+    copy_file_buffered(src, dst)
+}
+
+#[inline]
+pub fn copy_file_via_ram(src: &Path, dst: &Path) -> io::Result<u64> {
+    if let Some(parent) = dst.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
     let data = fs::read(src)?;
     let file_size = data.len() as u64;
 
-    // Write entire file from memory
     fs::write(dst, &data)?;
 
     Ok(file_size)
 }
 
-/// Get file size
 #[allow(dead_code)]
+#[inline]
 pub fn get_file_size(path: &Path) -> io::Result<u64> {
     fs::metadata(path).map(|m| m.len())
 }
@@ -139,8 +178,8 @@ mod tests {
 
     #[test]
     fn test_get_buffer_size() {
-        assert_eq!(get_buffer_size(500_000), 8 * 1024); // Small file
-        assert_eq!(get_buffer_size(2_000_000), 64 * 1024); // Large file
+        assert_eq!(get_buffer_size(500_000), 8 * 1024);
+        assert_eq!(get_buffer_size(2_000_000), 64 * 1024);
     }
 
     #[test]

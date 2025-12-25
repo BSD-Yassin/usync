@@ -35,6 +35,10 @@
             # Optional: AWS CLI for S3 testing
             awscli2
             
+            # Podman for MinIO testing (optional, preferred over Docker)
+            # Note: podman-compose may need to be installed separately or use 'podman compose' subcommand
+            podman
+            
             # Platform-specific dependencies (Linux only)
           ] ++ pkgs.lib.optionals (pkgs.stdenv.isLinux) [
             linuxHeaders

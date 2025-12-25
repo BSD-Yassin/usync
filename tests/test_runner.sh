@@ -3,20 +3,49 @@ set -e
 
 BINARY="${1:-target/release/usync}"
 TEST_DIR="tests"
+RUN_S3_TESTS=0
+RUN_ALL_TESTS=0
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/setup_test_files.sh"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --s3)
+            RUN_S3_TESTS=1
+            shift
+            ;;
+        --all)
+            RUN_ALL_TESTS=1
+            RUN_S3_TESTS=1
+            shift
+            ;;
+        *)
+            if [ -z "$BINARY" ] || [ "$BINARY" = "target/release/usync" ]; then
+                BINARY="$1"
+            fi
+            shift
+            ;;
+    esac
+done
 
 echo "=== Running usync Integration Tests ==="
 echo "Using binary: $BINARY"
+if [ $RUN_S3_TESTS -eq 1 ]; then
+    echo "S3 tests: enabled"
+fi
 echo ""
 
 cleanup() {
-    rm -rf "$TEST_DIR/output"/*
-    echo "Cleaned up test output directory"
+    if [ -d "$TEST_DIR/output" ]; then
+        rm -rf "$TEST_DIR/output"/* "$TEST_DIR/output"/.[!.]* 2>/dev/null || true
+    fi
 }
 
 setup() {
     cleanup
+    setup_test_files
     mkdir -p "$TEST_DIR/output"
-    echo "Test environment ready"
 }
 
 test_single_file_copy() {
@@ -100,8 +129,10 @@ test_protocol_parsing() {
     output=$($BINARY "http://example.com/file.txt" "$TEST_DIR/output/http_test.txt" 2>&1)
     if echo "$output" | grep -q -i "download\|http\|curl\|wget\|error"; then
         echo "✓ PASS: HTTP protocol recognized"
+        return 0
     else
         echo "⚠ SKIP: HTTP download test (may require network or tools)"
+        return 0  # Skip is not a failure
     fi
 }
 
@@ -149,8 +180,6 @@ test_file_content_verification() {
 
 test_nested_directories() {
     echo "Test 13: Nested directory structure"
-    mkdir -p "$TEST_DIR/input/nested/level1/level2"
-    echo "nested content" > "$TEST_DIR/input/nested/level1/level2/deep.txt"
     $BINARY -r "$TEST_DIR/input/nested" "$TEST_DIR/output/nested_copy"
     if [ -f "$TEST_DIR/output/nested_copy/level1/level2/deep.txt" ]; then
         echo "✓ PASS: Nested directories copied"
@@ -173,32 +202,87 @@ test_multiple_files() {
     fi
 }
 
+# Check prerequisites for S3 tests
+check_s3_prerequisites() {
+    local missing=0
+    
+    # Check for Podman or Docker
+    if ! command -v podman &> /dev/null && ! command -v docker &> /dev/null; then
+        echo "⚠ Warning: Neither Podman nor Docker found. S3 tests require a container runtime." >&2
+        missing=1
+    fi
+    
+    if ! command -v aws &> /dev/null; then
+        echo "⚠ Warning: AWS CLI not found. S3 tests require AWS CLI." >&2
+        missing=1
+    fi
+    
+    if [ $missing -eq 1 ]; then
+        echo "S3 tests will be skipped." >&2
+        return 1
+    fi
+    
+    return 0
+}
+
 main() {
     setup
     
     passed=0
     failed=0
+    skipped=0
     
-    test_single_file_copy && ((passed++)) || ((failed++))
-    test_file_to_directory && ((passed++)) || ((failed++))
-    test_recursive_copy && ((passed++)) || ((failed++))
-    test_recursive_flag && ((passed++)) || ((failed++))
-    test_verbose_mode && ((passed++)) || ((failed++))
-    test_progress_mode && ((passed++)) || ((failed++))
-    test_error_handling && ((passed++)) || ((failed++))
-    test_protocol_parsing && ((passed++)) || ((failed++))
-    test_help_output && ((passed++)) || ((failed++))
-    test_version_output && ((passed++)) || ((failed++))
-    test_short_flags && ((passed++)) || ((failed++))
-    test_file_content_verification && ((passed++)) || ((failed++))
-    test_nested_directories && ((passed++)) || ((failed++))
-    test_multiple_files && ((passed++)) || ((failed++))
+    # Run standard tests
+    # Use explicit if/else to avoid issues with set -e and arithmetic expansion
+    if test_single_file_copy; then ((passed++)); else ((failed++)); fi
+    if test_file_to_directory; then ((passed++)); else ((failed++)); fi
+    if test_recursive_copy; then ((passed++)); else ((failed++)); fi
+    if test_recursive_flag; then ((passed++)); else ((failed++)); fi
+    if test_verbose_mode; then ((passed++)); else ((failed++)); fi
+    if test_progress_mode; then ((passed++)); else ((failed++)); fi
+    if test_error_handling; then ((passed++)); else ((failed++)); fi
+    if test_protocol_parsing; then ((passed++)); else ((failed++)); fi
+    if test_help_output; then ((passed++)); else ((failed++)); fi
+    if test_version_output; then ((passed++)); else ((failed++)); fi
+    if test_short_flags; then ((passed++)); else ((failed++)); fi
+    if test_file_content_verification; then ((passed++)); else ((failed++)); fi
+    if test_nested_directories; then ((passed++)); else ((failed++)); fi
+    if test_multiple_files; then ((passed++)); else ((failed++)); fi
+    
+    # Run S3 tests if requested
+    if [ $RUN_S3_TESTS -eq 1 ]; then
+        echo ""
+        echo "=== Running S3 Tests ==="
+        
+        if check_s3_prerequisites; then
+            # Source S3 test script
+            SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            if [ -f "${SCRIPT_DIR}/s3_tests.sh" ]; then
+                # Run S3 tests and capture results
+                if bash "${SCRIPT_DIR}/s3_tests.sh" "$BINARY"; then
+                    echo "✓ S3 tests completed"
+                else
+                    echo "✗ S3 tests had failures"
+                    ((failed++))
+                fi
+            else
+                echo "⚠ S3 test script not found: ${SCRIPT_DIR}/s3_tests.sh"
+                ((skipped++))
+            fi
+        else
+            echo "⚠ S3 tests skipped (prerequisites not met)"
+            ((skipped++))
+        fi
+    fi
     
     echo ""
     echo "=== Test Summary ==="
-    echo "Passed: $passed"
-    echo "Failed: $failed"
-    echo "Total: $((passed + failed))"
+    echo "Passed:  $passed"
+    echo "Failed:  $failed"
+    if [ $skipped -gt 0 ]; then
+        echo "Skipped: $skipped"
+    fi
+    echo "Total:   $((passed + failed + skipped))"
     
     if [ $failed -eq 0 ]; then
         echo "✓ All tests passed!"

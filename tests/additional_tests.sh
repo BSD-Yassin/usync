@@ -4,8 +4,16 @@ set -e
 BINARY="${1:-target/release/usync}"
 TEST_DIR="tests"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/setup_test_files.sh"
+
 echo "=== Additional usync Tests ==="
 echo ""
+
+setup() {
+    setup_test_files
+    mkdir -p "$TEST_DIR/output"
+}
 
 test_ssh_style_parsing() {
     echo "Test: SSH-style path parsing"
@@ -40,7 +48,6 @@ test_environment_verbose() {
 
 test_empty_file() {
     echo "Test: Empty file copy"
-    touch "$TEST_DIR/input/empty.txt"
     $BINARY "$TEST_DIR/input/empty.txt" "$TEST_DIR/output/empty_copy.txt"
     if [ -f "$TEST_DIR/output/empty_copy.txt" ] && [ ! -s "$TEST_DIR/output/empty_copy.txt" ]; then
         echo "✓ PASS: Empty file copied"
@@ -52,7 +59,6 @@ test_empty_file() {
 
 test_special_characters() {
     echo "Test: Special characters in filename"
-    echo "special content" > "$TEST_DIR/input/file with spaces.txt"
     $BINARY "$TEST_DIR/input/file with spaces.txt" "$TEST_DIR/output/special_copy.txt"
     if [ -f "$TEST_DIR/output/special_copy.txt" ]; then
         echo "✓ PASS: Special characters handled"
@@ -64,12 +70,6 @@ test_special_characters() {
 
 test_large_directory() {
     echo "Test: Large directory structure"
-    mkdir -p "$TEST_DIR/input/large/"{1..5}
-    for i in {1..5}; do
-        for j in {1..10}; do
-            echo "content $i-$j" > "$TEST_DIR/input/large/$i/file_$j.txt"
-        done
-    done
     $BINARY -r "$TEST_DIR/input/large" "$TEST_DIR/output/large_copy"
     count=$(find "$TEST_DIR/output/large_copy" -type f | wc -l)
     if [ "$count" -eq 50 ]; then
@@ -115,7 +115,6 @@ test_parent_directory_creation() {
 
 test_binary_file() {
     echo "Test: Binary file copy"
-    printf '\x00\x01\x02\x03\xFF\xFE\xFD' > "$TEST_DIR/input/binary.bin"
     $BINARY "$TEST_DIR/input/binary.bin" "$TEST_DIR/output/binary_copy.bin"
     if cmp -s "$TEST_DIR/input/binary.bin" "$TEST_DIR/output/binary_copy.bin"; then
         echo "✓ PASS: Binary file copied correctly"
@@ -126,6 +125,7 @@ test_binary_file() {
 }
 
 main() {
+    setup
     passed=0
     failed=0
     

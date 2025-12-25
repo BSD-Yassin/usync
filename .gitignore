@@ -18,8 +18,17 @@ Thumbs.db
 .envrc
 
 # Test artifacts
-test/output/
+tests/input/
+tests/output/
+tests/s3_output/
+tests/fixtures/
 *.log
+
+# Benchmark artifacts
+comparisons/bench/
+comparisons/results/
+benchmark/
+benchmark_results.txt
 
 # Build artifacts
 *.d

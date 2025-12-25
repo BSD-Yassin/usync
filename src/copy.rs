@@ -13,16 +13,17 @@ use crate::utils;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// Statistics for copy operations
+#[repr(C)]
 #[derive(Default)]
 pub struct CopyStats {
-    pub files_copied: usize,
     pub bytes_copied: u64,
+    pub files_copied: usize,
     pub files_skipped: usize,
     pub start_time: Option<Instant>,
 }
 
 impl CopyStats {
+    #[inline]
     pub fn new() -> Self {
         Self {
             files_copied: 0,
@@ -32,6 +33,17 @@ impl CopyStats {
         }
     }
 
+    #[inline]
+    pub fn new_minimal() -> Self {
+        Self {
+            files_copied: 0,
+            bytes_copied: 0,
+            files_skipped: 0,
+            start_time: None,
+        }
+    }
+
+    #[inline]
     pub fn print_summary(&self, verbose: bool) {
         if let Some(start) = self.start_time {
             let duration = start.elapsed();
@@ -76,7 +88,11 @@ pub fn copy(
     progress: bool,
     use_ram: bool,
 ) -> Result<CopyStats, CopyError> {
-    let mut stats = CopyStats::new();
+    let mut stats = if verbose || progress {
+        CopyStats::new()
+    } else {
+        CopyStats::new_minimal()
+    };
 
     let result = match (src, dst) {
         (ProtocolPath::Local(src_local), ProtocolPath::Local(dst_local)) => {
@@ -107,16 +123,26 @@ fn copy_local_with_stats(
     stats: &mut CopyStats,
 ) -> Result<(), CopyError> {
     if !src.exists() {
-        return Err(CopyError::SourceNotFound(src.to_string_lossy().to_string()));
+        let path_str = src.to_string_lossy();
+        return Err(CopyError::SourceNotFound(path_str.as_ref().to_string()));
     }
 
     let src_path = src.as_path();
     let dst_path = dst.as_path();
 
     if src.is_file() {
-        let bytes = copy_file(src_path, dst_path, verbose, progress, use_ram)?;
-        stats.files_copied += 1;
-        stats.bytes_copied += bytes;
+        let bytes = copy_file(
+            src_path,
+            dst_path,
+            verbose,
+            progress,
+            use_ram,
+            stats.start_time.is_some(),
+        )?;
+        if stats.start_time.is_some() {
+            stats.files_copied += 1;
+            stats.bytes_copied += bytes;
+        }
         Ok(())
     } else if src.is_dir() {
         copy_directory_with_stats(src_path, dst_path, verbose, progress, use_ram, stats)
@@ -197,7 +223,6 @@ fn copy_from_local_to_remote(
     }
 }
 
-// Legacy function for backward compatibility
 #[allow(dead_code)]
 pub fn copy_local(
     src: &LocalPath,
@@ -209,12 +234,14 @@ pub fn copy_local(
     copy_local_with_stats(src, dst, verbose, progress, false, &mut stats)
 }
 
+#[inline]
 fn copy_file(
     src: &Path,
     dst: &Path,
     verbose: bool,
     progress: bool,
     use_ram: bool,
+    track_stats: bool,
 ) -> Result<u64, CopyError> {
     let final_dst = if dst.is_dir() {
         if let Some(file_name) = src.file_name() {
@@ -283,35 +310,59 @@ fn copy_file(
         }
     }
 
-    let start = Instant::now();
-
-    // Choose copy method based on flags
-    let result = if use_ram {
-        // Check file size before using RAM (warn if very large)
-        if src_size > 100 * 1024 * 1024 {
-            // 100MB
-            if verbose {
-                eprintln!(
-                    "Warning: File is large ({} MB), RAM copy may use significant memory",
-                    src_size as f64 / 1_048_576.0
-                );
-            }
-        }
-        utils::copy_file_via_ram(src, &final_dst)
+    let start = if track_stats {
+        Some(Instant::now())
     } else {
-        // Try sendfile on Linux, fallback to buffered copy
+        None
+    };
+
+    let result: Result<u64, CopyError> = if !verbose && !progress && !use_ram && !track_stats {
+        fs::copy(src, &final_dst).map_err(|e| CopyError::IoError {
+            message: format!("Failed to copy file: {}", final_dst.display()),
+            error: e,
+        })
+    } else if use_ram {
+        if src_size > 100 * 1024 * 1024 && verbose {
+            eprintln!(
+                "Warning: File is large ({} MB), RAM copy may use significant memory",
+                src_size as f64 / 1_048_576.0
+            );
+        }
+        utils::copy_file_via_ram(src, &final_dst).map_err(|e| CopyError::IoError {
+            message: format!("Failed to copy file via RAM: {}", final_dst.display()),
+            error: e,
+        })
+    } else {
         #[cfg(target_os = "linux")]
         {
             if src_size > 1024 * 1024 {
-                // Use sendfile for large files on Linux
                 utils::copy_file_sendfile(src, &final_dst)
                     .or_else(|_| utils::copy_file_buffered(src, &final_dst))
+                    .map_err(|e| CopyError::IoError {
+                        message: format!("Failed to copy file: {}", final_dst.display()),
+                        error: e,
+                    })
             } else {
-                utils::copy_file_buffered(src, &final_dst)
+                utils::copy_file_buffered(src, &final_dst).map_err(|e| CopyError::IoError {
+                    message: format!("Failed to copy file: {}", final_dst.display()),
+                    error: e,
+                })
             }
         }
-        #[cfg(not(target_os = "linux"))]
-        utils::copy_file_buffered(src, &final_dst)
+        #[cfg(target_os = "macos")]
+        {
+            utils::copy_file_range_macos(src, &final_dst)
+                .or_else(|_| utils::copy_file_buffered(src, &final_dst))
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Failed to copy file: {}", final_dst.display()),
+                    error: e,
+                })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        utils::copy_file_buffered(src, &final_dst).map_err(|e| CopyError::IoError {
+            message: format!("Failed to copy file: {}", final_dst.display()),
+            error: e,
+        })
     };
 
     match result {
@@ -331,19 +382,23 @@ fn copy_file(
                 }
             }
 
-            if verbose {
-                let duration = start.elapsed();
-                let speed = if duration.as_secs_f64() > 0.0 {
-                    bytes_copied as f64 / duration.as_secs_f64() / 1_048_576.0
-                } else {
-                    0.0
-                };
-                println!(
-                    "Copied {} bytes in {:.2}s ({:.2} MB/s)",
-                    bytes_copied,
-                    duration.as_secs_f64(),
-                    speed
-                );
+            if verbose && track_stats {
+                if let Some(start_time) = start {
+                    let duration = start_time.elapsed();
+                    let speed = if duration.as_secs_f64() > 0.0 {
+                        bytes_copied as f64 / duration.as_secs_f64() / 1_048_576.0
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "Copied {} bytes in {:.2}s ({:.2} MB/s)",
+                        bytes_copied,
+                        duration.as_secs_f64(),
+                        speed
+                    );
+                }
+            } else if verbose {
+                println!("Copied {} bytes", bytes_copied);
             }
             Ok(bytes_copied)
         }
@@ -354,14 +409,7 @@ fn copy_file(
                     p.abandon();
                 }
             }
-            Err(CopyError::IoError {
-                message: format!(
-                    "Failed to copy file from {} to {}",
-                    src.display(),
-                    final_dst.display()
-                ),
-                error: e,
-            })
+            Err(e)
         }
     }
 }
@@ -405,7 +453,6 @@ fn copy_directory_recursive_with_stats(
 ) -> Result<(), CopyError> {
     #[cfg(feature = "progress")]
     let (multi, overall_pb, current_pb) = {
-        // Count total files first for progress tracking
         let total_files = count_files(src)?;
         use std::io::IsTerminal;
         if progress && std::io::stdout().is_terminal() {
@@ -507,7 +554,6 @@ fn copy_directory_recursive_impl(
             error: e,
         })?;
 
-    // Collect files and directories separately for parallel processing
     let mut dirs = Vec::new();
     let mut files = Vec::new();
 
@@ -523,42 +569,111 @@ fn copy_directory_recursive_impl(
         }
     }
 
-    // Process directories first (sequential, as they may contain files)
-    for (src_path, dst_path) in dirs {
-        if verbose && !progress {
-            println!(
-                "Copying directory: {} -> {}",
-                src_path.display(),
-                dst_path.display()
-            );
-        }
-        fs::create_dir_all(&dst_path).map_err(|e| CopyError::IoError {
-            message: format!("Failed to create directory: {}", dst_path.display()),
-            error: e,
-        })?;
-        #[cfg(feature = "progress")]
-        copy_directory_recursive_impl(
-            &src_path, &dst_path, verbose, progress, use_ram, stats, overall_pb, current_pb,
-        )?;
-        #[cfg(not(feature = "progress"))]
-        copy_directory_recursive_impl(
-            &src_path, &dst_path, verbose, progress, use_ram, stats, &None, &None,
-        )?;
-    }
-
-    // Process files in parallel if feature enabled
     #[cfg(feature = "parallel")]
     {
-        let stats_arc = Arc::new(Mutex::new((0usize, 0u64)));
-        files.par_iter().try_for_each(
+        let stats_arc = if stats.start_time.is_some() {
+            Some(Arc::new(Mutex::new(CopyStats {
+                bytes_copied: 0,
+                files_copied: 0,
+                files_skipped: 0,
+                start_time: stats.start_time,
+            })))
+        } else {
+            None
+        };
+
+        dirs.par_iter().try_for_each(|(src_path, dst_path)| -> Result<(), CopyError> {
+            if verbose && !progress {
+                println!(
+                    "Copying directory: {} -> {}",
+                    src_path.display(),
+                    dst_path.display()
+                );
+            }
+            fs::create_dir_all(dst_path).map_err(|e| CopyError::IoError {
+                message: format!("Failed to create directory: {}", dst_path.display()),
+                error: e,
+            })?;
+            
+            let mut local_stats = if let Some(ref arc) = stats_arc {
+                CopyStats {
+                    bytes_copied: 0,
+                    files_copied: 0,
+                    files_skipped: 0,
+                    start_time: arc.lock().unwrap().start_time,
+                }
+            } else {
+                CopyStats::new_minimal()
+            };
+            
+            #[cfg(feature = "progress")]
+            copy_directory_recursive_impl(
+                src_path, dst_path, verbose, progress, use_ram, &mut local_stats, overall_pb, current_pb,
+            )?;
+            #[cfg(not(feature = "progress"))]
+            copy_directory_recursive_impl(
+                src_path, dst_path, verbose, progress, use_ram, &mut local_stats, &None, &None,
+            )?;
+            
+            if let Some(ref arc) = stats_arc {
+                let mut s = arc.lock().unwrap();
+                s.files_copied += local_stats.files_copied;
+                s.bytes_copied += local_stats.bytes_copied;
+                s.files_skipped += local_stats.files_skipped;
+            }
+            
+            Ok(())
+        })?;
+        
+        if let Some(ref arc) = stats_arc {
+            let s = arc.lock().unwrap();
+            stats.files_copied += s.files_copied;
+            stats.bytes_copied += s.bytes_copied;
+            stats.files_skipped += s.files_skipped;
+        }
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        for (src_path, dst_path) in dirs {
+            if verbose && !progress {
+                println!(
+                    "Copying directory: {} -> {}",
+                    src_path.display(),
+                    dst_path.display()
+                );
+            }
+            fs::create_dir_all(&dst_path).map_err(|e| CopyError::IoError {
+                message: format!("Failed to create directory: {}", dst_path.display()),
+                error: e,
+            })?;
+            #[cfg(feature = "progress")]
+            copy_directory_recursive_impl(
+                &src_path, &dst_path, verbose, progress, use_ram, stats, overall_pb, current_pb,
+            )?;
+            #[cfg(not(feature = "progress"))]
+            copy_directory_recursive_impl(
+                &src_path, &dst_path, verbose, progress, use_ram, stats, &None, &None,
+            )?;
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    {
+        let stats_arc: Option<Arc<Mutex<(usize, u64)>>> = if stats.start_time.is_some() {
+            Some(Arc::new(Mutex::new((0usize, 0u64))))
+        } else {
+            None
+        };
+        files.iter().try_for_each(
             |(src_path, dst_path, file_name)| -> Result<(), CopyError> {
-                // Cache metadata
                 let file_size = fs::metadata(src_path).map(|m| m.len()).unwrap_or(0);
 
                 #[cfg(feature = "progress")]
                 if let Some(ref pb) = current_pb {
                     pb.set_length(file_size);
-                    pb.set_message(file_name.to_string_lossy().to_string());
+                    let file_name_str = file_name.to_string_lossy();
+                    pb.set_message(file_name_str.as_ref().to_string());
                     pb.set_position(0);
                 }
 
@@ -617,8 +732,8 @@ fn copy_directory_recursive_impl(
                     pb.finish();
                 }
 
-                {
-                    let mut s = stats_arc.lock().unwrap();
+                if let Some(ref stats_lock) = stats_arc {
+                    let mut s = stats_lock.lock().unwrap();
                     s.0 += 1;
                     s.1 += bytes;
                 }
@@ -648,15 +763,18 @@ fn copy_directory_recursive_impl(
             },
         )?;
 
-        let (files_count, bytes_count) = *stats_arc.lock().unwrap();
-        stats.files_copied += files_count;
-        stats.bytes_copied += bytes_count;
+        if let Some(ref stats_lock) = stats_arc {
+            let (files_count, bytes_count) = *stats_lock.lock().unwrap();
+            if stats.start_time.is_some() {
+                stats.files_copied += files_count;
+                stats.bytes_copied += bytes_count;
+            }
+        }
     }
 
     #[cfg(not(feature = "parallel"))]
     {
         for (src_path, dst_path, file_name) in files {
-            // Cache metadata
             let file_size = fs::metadata(&src_path).map(|m| m.len()).unwrap_or(0);
 
             #[cfg(feature = "progress")]
@@ -719,8 +837,10 @@ fn copy_directory_recursive_impl(
                 pb.finish();
             }
 
-            stats.files_copied += 1;
-            stats.bytes_copied += bytes;
+            if stats.start_time.is_some() {
+                stats.files_copied += 1;
+                stats.bytes_copied += bytes;
+            }
 
             #[cfg(feature = "progress")]
             if let Some(ref pb) = overall_pb {

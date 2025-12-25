@@ -223,7 +223,10 @@ fn main() {
             .unwrap_or_default()
     };
 
-    let show_progress = args.progress || verbose;
+    let env_progress = std::env::var("USYNC_PROGRESS")
+        .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(false);
+    let show_progress = args.progress || env_progress;
 
     if verbose {
         if args.move_files {
@@ -242,7 +245,6 @@ fn main() {
         args.use_ram,
     ) {
         Ok(stats) => {
-            // If move flag is set, delete source files after successful copy
             if args.move_files {
                 match delete_source(&src_path, verbose) {
                     Ok(()) => {
@@ -298,7 +300,9 @@ fn main() {
                 #[cfg(not(feature = "color"))]
                 println!("Successfully copied {} to {}", src_str, dst_str);
             }
-            stats.print_summary(verbose);
+            if verbose || show_progress {
+                stats.print_summary(verbose);
+            }
         }
         Err(e) => {
             #[cfg(feature = "color")]
@@ -333,7 +337,6 @@ fn delete_source(path: &protocol::Path, verbose: bool) -> Result<(), String> {
         protocol::Path::Local(local_path) => {
             let path = local_path.as_path();
             if path.is_dir() {
-                // For directories, recursively remove all contents
                 if verbose {
                     println!("Removing directory and all contents: {}", path.display());
                 }
