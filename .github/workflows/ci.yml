@@ -96,7 +96,7 @@ jobs:
     
     # Install cross-compilation dependencies for Linux targets
     - name: Install cross-compilation dependencies (Linux)
-      if: matrix.os == 'ubuntu-latest' && matrix.cross == true
+      if: runner.os == 'Linux' && matrix.cross == true
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-${{ matrix.target }} qemu-user-static binfmt-support
