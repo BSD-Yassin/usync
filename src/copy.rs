@@ -145,6 +145,11 @@ fn copy_from_remote_to_local(
             remote::copy_from_http_to_file(src, dst_path, verbose, progress)
                 .map_err(CopyError::RemoteError)
         }
+        crate::protocol::Protocol::S3 => {
+            let dst_path = dst.as_path();
+            remote::copy_from_s3_to_file(src, dst_path, verbose, progress)
+                .map_err(CopyError::RemoteError)
+        }
         _ => Err(CopyError::UnsupportedProtocol(format!(
             "Copying from {} protocol is not supported",
             src.protocol
@@ -168,6 +173,20 @@ fn copy_from_local_to_remote(
             } else {
                 Err(CopyError::UnsupportedProtocol(
                     "Directory copying to remote is not yet implemented".to_string(),
+                ))
+            }
+        }
+        crate::protocol::Protocol::S3 => {
+            let src_path = src.as_path();
+            if src.is_file() {
+                remote::copy_file_to_s3(src_path, dst, verbose, progress)
+                    .map_err(CopyError::RemoteError)
+            } else if src.is_dir() {
+                remote::copy_directory_to_s3(src_path, dst, verbose, progress)
+                    .map_err(CopyError::RemoteError)
+            } else {
+                Err(CopyError::UnsupportedProtocol(
+                    "Source must be a file or directory".to_string(),
                 ))
             }
         }
@@ -754,7 +773,7 @@ impl std::fmt::Display for CopyError {
                 write!(f, "Remote copy error: {}\n\nSuggestion: Verify network connectivity and remote server access.", e)
             }
             CopyError::UnsupportedProtocol(msg) => {
-                write!(f, "Unsupported protocol: {}\n\nSupported protocols: ssh://, sftp://, http://, https://\nFor more information, see: https://github.com/yassinbousaadi/usync", msg)
+                write!(f, "Unsupported protocol: {}\n\nSupported protocols: ssh://, sftp://, http://, https://, s3://\nFor more information, see: https://github.com/yassinbousaadi/usync", msg)
             }
         }
     }

@@ -11,12 +11,15 @@ tempfile = "3.10"
 indicatif = { version = "0.17", optional = true }
 colored = { version = "2.1", optional = true }
 rayon = { version = "1.8", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
+tokio = { version = "1", optional = true, features = ["full"] }
 [features]
 default = []
 progress = ["indicatif"]
 color = ["colored"]
 ssh-rust = ["ssh2"]
 parallel = ["rayon"]
+s3-sdk = ["aws-sdk-s3", "tokio"]
 
 [dev-dependencies]
 tempfile = "3.10"

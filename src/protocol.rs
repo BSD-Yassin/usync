@@ -20,6 +20,7 @@ pub enum Protocol {
     Sftp,
     Http,
     Https,
+    S3,
     File,
     Unknown(String),
 }
@@ -31,6 +32,7 @@ impl Protocol {
             "sftp" => Protocol::Sftp,
             "http" => Protocol::Http,
             "https" => Protocol::Https,
+            "s3" => Protocol::S3,
             "file" => Protocol::File,
             other => Protocol::Unknown(other.to_string()),
         }
@@ -42,6 +44,7 @@ impl Protocol {
             Protocol::Sftp => "sftp",
             Protocol::Http => "http",
             Protocol::Https => "https",
+            Protocol::S3 => "s3",
             Protocol::File => "file",
             Protocol::Unknown(s) => s,
         }
@@ -216,5 +219,25 @@ mod tests {
         assert_eq!(Protocol::Ssh.to_string(), "ssh");
         assert_eq!(Protocol::Http.to_string(), "http");
         assert_eq!(Protocol::Https.to_string(), "https");
+        assert_eq!(Protocol::S3.to_string(), "s3");
+    }
+
+    #[test]
+    fn test_parse_s3_url() {
+        let result = parse_path("s3://my-bucket/path/to/file.txt");
+        assert!(matches!(result, Ok(Path::Remote(_))));
+        if let Ok(Path::Remote(rp)) = result {
+            assert_eq!(rp.protocol, Protocol::S3);
+            assert_eq!(rp.path, "/path/to/file.txt");
+        }
+    }
+
+    #[test]
+    fn test_parse_s3_url_with_prefix() {
+        let result = parse_path("s3://l-ec1-ctaphost/ctaphost/dt=20250928/file.txt");
+        assert!(matches!(result, Ok(Path::Remote(_))));
+        if let Ok(Path::Remote(rp)) = result {
+            assert_eq!(rp.protocol, Protocol::S3);
+        }
     }
 }

@@ -14,6 +14,9 @@ pub fn copy_remote(
         (Protocol::Ssh | Protocol::Sftp, Protocol::Ssh | Protocol::Sftp) => {
             copy_ssh_to_ssh(src, dst, verbose, ssh_opts, progress)
         }
+        (Protocol::S3, Protocol::S3) => Err(RemoteCopyError::NotImplemented(
+            "S3 to S3 copy is not yet implemented".to_string(),
+        )),
         (Protocol::Ssh | Protocol::Sftp, _) => copy_from_ssh(src, dst, verbose),
         (_, Protocol::Ssh | Protocol::Sftp) => copy_to_ssh(src, dst, verbose),
         _ => Err(RemoteCopyError::UnsupportedProtocol {
@@ -351,4 +354,286 @@ fn try_wget(url: &str, dst_path: &Path, verbose: bool, progress: bool) -> Result
     }
 
     Ok(cmd)
+}
+
+/// Copy file from S3 to local using AWS CLI, with SDK fallback
+pub fn copy_from_s3_to_file(
+    src: &RemotePath,
+    dst_path: &Path,
+    verbose: bool,
+    progress: bool,
+) -> Result<(), RemoteCopyError> {
+    let s3_url = src.url.to_string();
+
+    if verbose {
+        println!("Copying from S3: {} to {}", s3_url, dst_path.display());
+    }
+
+    if let Some(parent) = dst_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| RemoteCopyError::IoError {
+            message: format!("Failed to create directory: {}", parent.display()),
+            error: e.to_string(),
+        })?;
+    }
+
+    // Try AWS CLI first
+    if let Ok(mut cmd) = try_aws_cli(&s3_url, Some(dst_path), None, verbose, progress, true) {
+        let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+            message: "Failed to execute aws s3 cp".to_string(),
+            error: e.to_string(),
+        })?;
+
+        if status.success() {
+            if verbose {
+                println!("✓ Successfully copied from S3 using AWS CLI");
+            }
+            return Ok(());
+        } else if verbose {
+            println!("AWS CLI failed, trying SDK fallback...");
+        }
+    } else if verbose {
+        println!("AWS CLI not found, trying SDK fallback...");
+    }
+
+    // Fallback to SDK
+    #[cfg(feature = "s3-sdk")]
+    {
+        return copy_from_s3_to_file_sdk(src, dst_path, verbose, progress);
+    }
+
+    #[cfg(not(feature = "s3-sdk"))]
+    {
+        Err(RemoteCopyError::IoError {
+            message: "AWS CLI not found and SDK feature not enabled".to_string(),
+            error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
+        })
+    }
+}
+
+/// Copy file to S3 using AWS CLI, with SDK fallback
+pub fn copy_file_to_s3(
+    src_path: &Path,
+    dst: &RemotePath,
+    verbose: bool,
+    progress: bool,
+) -> Result<(), RemoteCopyError> {
+    let s3_url = dst.url.to_string();
+
+    if verbose {
+        println!("Copying from {} to S3: {}", src_path.display(), s3_url);
+    }
+
+    // Try AWS CLI first
+    if let Ok(mut cmd) = try_aws_cli(&s3_url, Some(src_path), None, verbose, progress, false) {
+        let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+            message: "Failed to execute aws s3 cp".to_string(),
+            error: e.to_string(),
+        })?;
+
+        if status.success() {
+            if verbose {
+                println!("✓ Successfully copied to S3 using AWS CLI");
+            }
+            return Ok(());
+        } else if verbose {
+            println!("AWS CLI failed, trying SDK fallback...");
+        }
+    } else if verbose {
+        println!("AWS CLI not found, trying SDK fallback...");
+    }
+
+    // Fallback to SDK
+    #[cfg(feature = "s3-sdk")]
+    {
+        return copy_file_to_s3_sdk(src_path, dst, verbose, progress);
+    }
+
+    #[cfg(not(feature = "s3-sdk"))]
+    {
+        Err(RemoteCopyError::IoError {
+            message: "AWS CLI not found and SDK feature not enabled".to_string(),
+            error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
+        })
+    }
+}
+
+/// Copy directory to S3 using AWS CLI sync, with SDK fallback
+pub fn copy_directory_to_s3(
+    src_path: &Path,
+    dst: &RemotePath,
+    verbose: bool,
+    progress: bool,
+) -> Result<(), RemoteCopyError> {
+    let s3_url = dst.url.to_string();
+
+    if verbose {
+        println!("Syncing directory {} to S3: {}", src_path.display(), s3_url);
+    }
+
+    // Try AWS CLI sync first
+    if let Ok(mut cmd) = try_aws_cli_sync(src_path, &s3_url, verbose, progress) {
+        let status = cmd.status().map_err(|e| RemoteCopyError::IoError {
+            message: "Failed to execute aws s3 sync".to_string(),
+            error: e.to_string(),
+        })?;
+
+        if status.success() {
+            if verbose {
+                println!("✓ Successfully synced directory to S3 using AWS CLI");
+            }
+            return Ok(());
+        } else if verbose {
+            println!("AWS CLI sync failed, trying SDK fallback...");
+        }
+    } else if verbose {
+        println!("AWS CLI not found, trying SDK fallback...");
+    }
+
+    // Fallback to SDK (recursive copy)
+    #[cfg(feature = "s3-sdk")]
+    {
+        return copy_directory_to_s3_sdk(src_path, dst, verbose, progress);
+    }
+
+    #[cfg(not(feature = "s3-sdk"))]
+    {
+        Err(RemoteCopyError::IoError {
+            message: "AWS CLI not found and SDK feature not enabled".to_string(),
+            error: "Please install AWS CLI or build with --features s3-sdk".to_string(),
+        })
+    }
+}
+
+fn try_aws_cli(
+    s3_url: &str,
+    local_path: Option<&Path>,
+    profile: Option<&str>,
+    verbose: bool,
+    progress: bool,
+    is_download: bool,
+) -> Result<Command, ()> {
+    // Check if aws CLI is available
+    let check = Command::new("aws").arg("--version").output();
+    if check.is_err() {
+        return Err(());
+    }
+
+    let mut cmd = Command::new("aws");
+    cmd.arg("s3").arg("cp");
+
+    // Add profile if specified
+    if let Some(prof) = profile {
+        cmd.arg("--profile").arg(prof);
+    } else if let Ok(prof) = std::env::var("AWS_PROFILE") {
+        cmd.arg("--profile").arg(&prof);
+    }
+
+    // Add region if specified
+    if let Ok(region) = std::env::var("AWS_REGION") {
+        cmd.arg("--region").arg(&region);
+    }
+
+    if progress {
+        // AWS CLI shows progress by default, but we can make it more verbose
+        if verbose {
+            cmd.arg("--cli-read-timeout").arg("0");
+        }
+    } else {
+        cmd.arg("--quiet");
+    }
+
+    if is_download {
+        // Download: s3://bucket/path -> local_path
+        cmd.arg(s3_url);
+        if let Some(path) = local_path {
+            cmd.arg(path);
+        }
+    } else {
+        // Upload: local_path -> s3://bucket/path
+        if let Some(path) = local_path {
+            cmd.arg(path);
+        }
+        cmd.arg(s3_url);
+    }
+
+    Ok(cmd)
+}
+
+fn try_aws_cli_sync(
+    local_path: &Path,
+    s3_url: &str,
+    verbose: bool,
+    progress: bool,
+) -> Result<Command, ()> {
+    // Check if aws CLI is available
+    let check = Command::new("aws").arg("--version").output();
+    if check.is_err() {
+        return Err(());
+    }
+
+    let mut cmd = Command::new("aws");
+    cmd.arg("s3").arg("sync");
+
+    // Add profile if specified
+    if let Ok(prof) = std::env::var("AWS_PROFILE") {
+        cmd.arg("--profile").arg(&prof);
+    }
+
+    // Add region if specified
+    if let Ok(region) = std::env::var("AWS_REGION") {
+        cmd.arg("--region").arg(&region);
+    }
+
+    if progress {
+        // AWS CLI shows progress by default
+        if verbose {
+            cmd.arg("--cli-read-timeout").arg("0");
+        }
+    } else {
+        cmd.arg("--quiet");
+    }
+
+    cmd.arg(local_path).arg(s3_url);
+
+    Ok(cmd)
+}
+
+#[cfg(feature = "s3-sdk")]
+fn copy_from_s3_to_file_sdk(
+    src: &RemotePath,
+    dst_path: &Path,
+    verbose: bool,
+    _progress: bool,
+) -> Result<(), RemoteCopyError> {
+    // SDK implementation would go here
+    // For now, return an error indicating SDK is not fully implemented
+    Err(RemoteCopyError::NotImplemented(
+        "S3 SDK fallback is not yet fully implemented. Please install AWS CLI.".to_string(),
+    ))
+}
+
+#[cfg(feature = "s3-sdk")]
+fn copy_file_to_s3_sdk(
+    _src_path: &Path,
+    _dst: &RemotePath,
+    _verbose: bool,
+    _progress: bool,
+) -> Result<(), RemoteCopyError> {
+    // SDK implementation would go here
+    Err(RemoteCopyError::NotImplemented(
+        "S3 SDK fallback is not yet fully implemented. Please install AWS CLI.".to_string(),
+    ))
+}
+
+#[cfg(feature = "s3-sdk")]
+fn copy_directory_to_s3_sdk(
+    _src_path: &Path,
+    _dst: &RemotePath,
+    _verbose: bool,
+    _progress: bool,
+) -> Result<(), RemoteCopyError> {
+    // SDK implementation would go here
+    Err(RemoteCopyError::NotImplemented(
+        "S3 SDK fallback is not yet fully implemented. Please install AWS CLI.".to_string(),
+    ))
 }
