@@ -2,18 +2,33 @@
 
 A universal file copying and synchronization tool written in Rust. `usync` provides a simple, unified interface for copying files and directories locally and remotely, supporting multiple protocols including SSH, SFTP, HTTP, and HTTPS.
 
+u stood for universal, not ony in the platform or os that I would use but rather on the file transfert mecanism. I wanted to incorporate cloud services, general remote methods and in the future, less common ones. The methodology is to rely on the original tool instead of recreating the wheel or using less central tooling (prefer a client rather than an sdk, prefer a client rather than a module for the protocol ), but it could change based on how compatible this makes the tool, or maintenable. 
+sync does echo to the good old rsync, but I also wanted to emphasize continous file synchronization in the possibilities. 
+
+
 ## Features
 
 - **Local File Operations**: Copy files and directories recursively
 - **Remote Protocol Support**: 
   - SSH/SFTP via `scp`
   - HTTP/HTTPS via `curl` or `wget`
+- **Performance Optimizations**:
+  - RAM-based copying for small files (`--ram`)
+  - Zero-copy transfers on Linux (automatic)
+  - Adaptive buffer sizing
+  - Parallel processing (with `parallel` feature)
 - **Flexible Options**:
   - Recursive directory copying (`-r`, `--recursive`)
   - Verbose output (`-v`, `--verbose`)
   - Progress display (`-p`, `--progress`)
   - SSH options support (`-s`, `--ssh-opt`)
-- **Cross-Platform**: Works on Unix-like systems (Linux, macOS, BSD)
+  - Move files instead of copying (`-m`, `--move`)
+- **Cloud Services** (via CLI tools):
+  - AWS S3 via `aws s3 cp` and `aws s3 sync`
+  - Other cloud storage via their respective CLI tools
+- **Experimental Features**:
+  - Continuous synchronization daemon (see [Daemon Mode](#daemon-mode-experimental) below)
+- **Cross-Platform**: Works on Unix-like systems (Linux, macOS, BSD) and Windows
 
 ## Installation
 
@@ -63,27 +78,236 @@ Options:
   -s, --ssh-opt <OPTION>  SSH options to pass to scp (can be used multiple times)
   -r, --recursive         Copy directories recursively (skips confirmation)
   -p, --progress          Show progress during copy
+  --ram, --memory         Copy via RAM (faster for small files, uses more memory)
+  -m, --move              Move files instead of copying (removes source after copy)
   -h, --help              Print help
   -V, --version           Print version
 ```
 
 ### Environment Variables
 
-- `USYNC_VERBOSE`: Enable verbose mode (any non-empty value)
-- `USYNC_SSH_OPTS`: SSH options (space-separated, e.g., `"IdentityFile=~/.ssh/id_rsa StrictHostKeyChecking=no"`)
+usync supports several environment variables for configuration:
+
+- **`USYNC_VERBOSE`**: Enable verbose mode (any non-empty value)
+  ```bash
+  export USYNC_VERBOSE=1
+  # or
+  export USYNC_VERBOSE=true
+  ```
+
+- **`USYNC_SSH_OPTS`**: SSH options (space-separated)
+  ```bash
+  export USYNC_SSH_OPTS="IdentityFile=~/.ssh/id_rsa StrictHostKeyChecking=no"
+  ```
+
+- **`USYNC_CONFIG_PATH`** (planned): Path to configuration file
+  ```bash
+  export USYNC_CONFIG_PATH=~/.config/usync/config.toml
+  ```
+
+- **`USYNC_LOG_LEVEL`** (planned): Logging level (debug, info, warn, error)
+  ```bash
+  export USYNC_LOG_LEVEL=info
+  ```
+
+See `env.example` for a complete list of available environment variables.
+
+### Configuration File
+
+usync supports configuration via a TOML file (experimental). The configuration file can be specified via the `USYNC_CONFIG_PATH` environment variable or will be searched in standard locations:
+
+- `~/.config/usync/config.toml`
+- `~/.usync/config.toml`
+- `./usync.toml` (current directory)
+
+**Example configuration file** (`~/.config/usync/config.toml`):
+
+```toml
+[defaults]
+verbose = false
+progress = true
+recursive = false
+
+[ssh]
+default_opts = [
+    "IdentityFile=~/.ssh/id_rsa",
+    "StrictHostKeyChecking=no"
+]
+
+[cloud]
+# AWS S3 configuration
+aws_profile = "default"
+aws_region = "us-east-1"
+
+# Cloud storage endpoints
+s3_endpoint = "https://s3.amazonaws.com"
+
+[daemon]
+# Daemon mode settings (experimental)
+enabled = false
+watch_directories = [
+    "~/Documents/sync",
+    "~/Projects"
+]
+sync_interval = 5  # seconds
+```
+
+### Cloud Services
+
+usync can interact with cloud storage services through their native CLI tools:
+
+#### AWS S3
+
+usync leverages the AWS CLI for S3 operations:
+
+```bash
+# Copy from S3 (requires AWS CLI and credentials)
+usync s3://my-bucket/path/file.txt ./local-file.txt
+
+# Copy to S3
+usync ./local-file.txt s3://my-bucket/path/file.txt
+
+# Use specific AWS profile
+export AWS_PROFILE=my-profile
+usync s3://bucket/file.txt ./local.txt
+```
+
+**Requirements:**
+- AWS CLI installed (`aws --version`)
+- AWS credentials configured (`aws configure` or environment variables)
+- Appropriate IAM permissions for S3 access
+
+**Supported S3 operations:**
+- File copying (`aws s3 cp`)
+- Directory syncing (`aws s3 sync`)
+
+#### Other Cloud Services
+
+usync can work with other cloud storage services that provide CLI tools:
+- Google Cloud Storage (via `gsutil`)
+- Azure Blob Storage (via `az storage`)
+- Other S3-compatible services
+
+The methodology is to rely on native CLI tools rather than SDKs for better compatibility and maintainability.
+
+### Daemon Mode (Experimental)
+
+usync includes an experimental daemon mode for continuous file synchronization. This feature allows you to monitor directories and automatically sync changes.
+
+**⚠️ Warning**: Daemon mode is experimental and may have stability issues. Use with caution.
+
+#### Building with Daemon Support
+
+```bash
+cargo build --release --features daemon
+```
+
+#### Configuration
+
+Configure the daemon via the configuration file:
+
+```toml
+[daemon]
+enabled = true
+watch_directories = [
+    "~/Documents/sync",
+    "~/Projects/important"
+]
+sync_interval = 5  # seconds between sync checks
+log_file = "~/.local/share/usync/daemon.log"
+pid_file = "~/.local/share/usync/daemon.pid"
+
+[sync_rules]
+# Define sync rules
+[[sync_rules.rule]]
+source = "~/Documents/sync"
+destination = "ssh://user@host:/backup/sync"
+recursive = true
+```
+
+#### Starting the Daemon
+
+```bash
+# Start daemon (requires daemon feature)
+usync --daemon start
+
+# Stop daemon
+usync --daemon stop
+
+# Check daemon status
+usync --daemon status
+
+# View daemon logs
+tail -f ~/.local/share/usync/daemon.log
+```
+
+#### How It Works
+
+The daemon monitors specified directories for changes using file system events (inotify on Linux, FSEvents on macOS). When changes are detected, it automatically synchronizes files according to the configured rules.
+
+**Current Limitations:**
+- Linux and macOS only (requires platform-specific file watching)
+- Single-direction sync (source → destination)
+- No conflict resolution
+- Experimental status - may have bugs
+
+**Future Improvements:**
+- Bidirectional synchronization
+- Conflict resolution strategies
+- Better error handling and recovery
+- Systemd integration for Linux
 
 ## Requirements
 
-- Rust 1.70+ (for building from source)
+### Runtime Dependencies
+
 - `scp` (for SSH/SFTP operations)
 - `curl` or `wget` (for HTTP/HTTPS downloads)
+- `aws` CLI (for S3/cloud operations, optional)
+
+### Build Requirements
+
+- Rust 1.70+ (for building from source)
+- Cargo (Rust package manager)
+
+### Optional Dependencies
+
+- `aws` CLI for S3 support
+- `gsutil` for Google Cloud Storage support
+- `az` CLI for Azure Blob Storage support
 
 ## Development
 
 ### Building
 
 ```bash
-cargo build
+# Standard build
+cargo build --release
+
+# With optional features
+cargo build --release --features progress,color
+
+# With daemon support (experimental)
+cargo build --release --features daemon
+
+# With all features
+cargo build --release --features progress,color,parallel,ssh-rust,daemon
+```
+
+### Available Features
+
+Build usync with optional features for enhanced functionality:
+
+- **`progress`**: Progress bars for file transfers (requires `indicatif`)
+- **`color`**: Colored terminal output (requires `colored`)
+- **`parallel`**: Parallel directory processing (requires `rayon`)
+- **`ssh-rust`**: Native Rust SSH implementation (requires `ssh2`, alternative to `scp`)
+- **`daemon`**: Daemon mode for continuous synchronization (experimental)
+- **`logging`**: Enhanced logging capabilities
+
+Enable features during build:
+```bash
+cargo build --release --features progress,color,parallel
 ```
 
 ### Running Tests
@@ -102,13 +326,20 @@ cargo test --lib
 ```
 usync/
 ├── src/
-│   ├── main.rs       # CLI interface
+│   ├── main.rs       # CLI interface and argument parsing
 │   ├── path.rs       # Local path parsing and validation
 │   ├── protocol.rs   # Protocol detection and URL parsing
-│   ├── copy.rs       # Local file copying
-│   └── remote.rs     # Remote protocol implementations
-├── tests/            # Integration tests
-└── tests/            # Test data and scripts
+│   ├── copy.rs       # Local file copying with optimizations
+│   ├── remote.rs     # Remote protocol implementations
+│   └── utils.rs      # Utility functions (buffering, sendfile, etc.)
+├── tests/            # Integration tests and test data
+│   ├── input/        # Test input files
+│   ├── output/       # Test output directory
+│   ├── fixtures/     # Test fixtures
+│   └── test_runner.sh # Main test script
+├── .github/workflows/ # CI/CD workflows
+├── env.example       # Example environment variables
+└── Cargo.toml        # Project manifest and dependencies
 ```
 
 ## Contributing
@@ -131,4 +362,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [clap](https://github.com/clap-rs/clap) for CLI parsing
 - Uses standard Unix tools (`scp`, `curl`, `wget`) for remote operations
-
