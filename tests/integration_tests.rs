@@ -29,7 +29,7 @@ fn setup_test_env() -> (tempfile::TempDir, std::path::PathBuf) {
 
 fn get_binary_path() -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    
+
     // Check for target-specific release binary first
     let target = std::env::var("TARGET").unwrap_or_else(|_| {
         // Try to detect target from CARGO_BUILD_TARGET or use default
@@ -50,31 +50,31 @@ fn get_binary_path() -> String {
             }
         })
     });
-    
+
     // Try target-specific path first
     let target_release_path = format!("{}/target/{}/release/usync", manifest_dir, target);
     if std::path::Path::new(&target_release_path).exists() {
         return target_release_path;
     }
-    
+
     // Fallback to default release path
     let release_path = format!("{}/target/release/usync", manifest_dir);
     if std::path::Path::new(&release_path).exists() {
         return release_path;
     }
-    
+
     // Fallback to debug path
     let debug_path = format!("{}/target/debug/usync", manifest_dir);
     if std::path::Path::new(&debug_path).exists() {
         return debug_path;
     }
-    
+
     // Last resort: try target-specific debug path
     let target_debug_path = format!("{}/target/{}/debug/usync", manifest_dir, target);
     if std::path::Path::new(&target_debug_path).exists() {
         return target_debug_path;
     }
-    
+
     // If nothing found, return the default release path (test will fail with clear error)
     release_path
 }

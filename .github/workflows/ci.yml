@@ -152,6 +152,7 @@ jobs:
       if: matrix.cross != true
       env:
         TARGET: ${{ matrix.target }}
+        CARGO_BUILD_TARGET: ${{ matrix.target }}
       run: cargo test --target ${{ matrix.target }} --release
     
     - name: Run unit tests (cross-compiled)
