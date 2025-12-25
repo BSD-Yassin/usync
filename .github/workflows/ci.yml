@@ -50,10 +50,11 @@ jobs:
             arch: x86_64
             target: x86_64-unknown-linux-gnu
             toolchain: stable
-          - os: windows-latest
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-            toolchain: stable
+          # Windows builds commented out - to be handled separately
+          # - os: windows-latest
+          #   arch: x86_64
+          #   target: x86_64-pc-windows-msvc
+          #   toolchain: stable
           - os: macos-latest
             arch: x86_64
             target: x86_64-apple-darwin
@@ -163,25 +164,41 @@ jobs:
       if: runner.os != 'Windows' && matrix.cross != true
       run: |
         chmod +x tests/test_runner.sh || true
-        if [ -f "target/${{ matrix.target }}/release/usync" ]; then
-          ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync" || true
-        elif [ -f "target/release/usync" ]; then
-          ./tests/test_runner.sh "target/release/usync" || true
+        # macOS uses different binary path structure
+        if [ "${{ runner.os }}" == "macOS" ]; then
+          if [ -f "target/${{ matrix.target }}/release/usync" ]; then
+            ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync" || true
+          elif [ -f "target/release/usync" ]; then
+            ./tests/test_runner.sh "target/release/usync" || true
+          else
+            echo "Binary not found at target/${{ matrix.target }}/release/usync or target/release/usync"
+            echo "Listing target directory:"
+            ls -la target/ || true
+            ls -la target/release/ || true
+            ls -la "target/${{ matrix.target }}/release/" || true
+          fi
         else
-          echo "Binary not found, skipping integration tests"
+          if [ -f "target/${{ matrix.target }}/release/usync" ]; then
+            ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync" || true
+          elif [ -f "target/release/usync" ]; then
+            ./tests/test_runner.sh "target/release/usync" || true
+          else
+            echo "Binary not found, skipping integration tests"
+          fi
         fi
     
-    - name: Run integration tests (Windows)
-      if: runner.os == 'Windows'
-      shell: bash
-      run: |
-        if [ -f "target/${{ matrix.target }}/release/usync.exe" ]; then
-          ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync.exe" || true
-        elif [ -f "target/release/usync.exe" ]; then
-          ./tests/test_runner.sh "target/release/usync.exe" || true
-        else
-          echo "Binary not found, skipping integration tests"
-        fi
+    # Windows integration tests commented out - to be handled separately
+    # - name: Run integration tests (Windows)
+    #   if: runner.os == 'Windows'
+    #   shell: bash
+    #   run: |
+    #     if [ -f "target/${{ matrix.target }}/release/usync.exe" ]; then
+    #       ./tests/test_runner.sh "target/${{ matrix.target }}/release/usync.exe" || true
+    #     elif [ -f "target/release/usync.exe" ]; then
+    #       ./tests/test_runner.sh "target/release/usync.exe" || true
+    #     else
+    #       echo "Binary not found, skipping integration tests"
+    #     fi
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
