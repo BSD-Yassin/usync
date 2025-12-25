@@ -8,7 +8,7 @@ mod utils;
 
 use clap::Parser;
 
-use copy::copy;
+use copy::copy_with_options;
 use protocol::parse_path;
 use std::fs;
 
@@ -132,6 +132,14 @@ struct Args {
     /// Move files instead of copying (removes source after successful copy)
     #[arg(short = 'm', long = "move")]
     move_files: bool,
+
+    /// Verify file integrity using checksums after copy (MD5, SHA1, or SHA256)
+    #[arg(long = "checksum", value_name = "ALGORITHM")]
+    checksum: Option<String>,
+
+    /// Dry-run mode: show what would be copied without actually copying
+    #[arg(long = "dry-run")]
+    dry_run: bool,
 }
 
 fn main() {
@@ -225,10 +233,32 @@ fn main() {
             .unwrap_or_default()
     };
 
+    let checksum_algorithm = args.checksum.as_ref().and_then(|s| {
+        match s.to_lowercase().as_str() {
+            "md5" => Some(crate::backend::traits::ChecksumAlgorithm::Md5),
+            "sha1" => Some(crate::backend::traits::ChecksumAlgorithm::Sha1),
+            "sha256" => Some(crate::backend::traits::ChecksumAlgorithm::Sha256),
+            _ => {
+                eprintln!("Invalid checksum algorithm: {}. Use md5, sha1, or sha256", s);
+                None
+            }
+        }
+    });
+
+    let dry_run = args.dry_run || std::env::var("USYNC_DRY_RUN")
+        .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(false);
+
     let env_progress = std::env::var("USYNC_PROGRESS")
         .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
         .unwrap_or(false);
     let show_progress = args.progress || env_progress;
+
+    if dry_run {
+        println!("[DRY RUN] Would {} {} to {}", 
+            if args.move_files { "move" } else { "copy" },
+            src_str, dst_str);
+    }
 
     if verbose {
         if args.move_files {
@@ -238,13 +268,15 @@ fn main() {
         }
     }
 
-    match copy(
+    match copy_with_options(
         &src_path,
         &dst_path,
         verbose,
         &ssh_opts,
         show_progress,
         args.use_ram,
+        checksum_algorithm,
+        dry_run,
     ) {
         Ok(stats) => {
             if args.move_files {

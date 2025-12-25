@@ -10,7 +10,8 @@ use crate::protocol::Path as ProtocolPath;
 use crate::remote;
 use crate::utils;
 use crate::backend::{create_backend, BackendInstance};
-use crate::backend::traits::{Backend, CopyOptions};
+use crate::backend::traits::Backend;
+use crate::backend::traits::CopyOptions;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -90,18 +91,31 @@ pub fn copy(
     progress: bool,
     use_ram: bool,
 ) -> Result<CopyStats, CopyError> {
+    copy_with_options(src, dst, verbose, ssh_opts, progress, use_ram, None, false)
+}
+
+pub fn copy_with_options(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+) -> Result<CopyStats, CopyError> {
     let opts = CopyOptions {
         verbose,
         progress,
         use_ram,
         recursive: true,
         ssh_opts: ssh_opts.to_vec(),
-        dry_run: false,
+        dry_run,
     };
 
     match (create_backend(src), create_backend(dst)) {
         (Ok(src_backend), Ok(dst_backend)) => {
-            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts)
+            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts, checksum_algorithm)
         }
         _ => {
             copy_legacy(src, dst, verbose, ssh_opts, progress, use_ram)
@@ -115,6 +129,7 @@ fn copy_with_backends(
     src_backend: &BackendInstance,
     dst_backend: &BackendInstance,
     opts: &CopyOptions,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
 ) -> Result<CopyStats, CopyError> {
     let src_str = match src {
         ProtocolPath::Local(local) => local.to_string_lossy().to_string(),
@@ -145,6 +160,14 @@ fn copy_with_backends(
                 });
             }
         };
+        
+        if let Some(algorithm) = checksum_algorithm {
+            if opts.verbose {
+                println!("Verifying checksums for directory...");
+            }
+            verify_directory_checksums(src_backend.as_backend(), dst_backend.as_backend(), &src_str, &dst_str, algorithm, opts.verbose)?;
+        }
+        
         Ok(stats)
     } else {
         let bytes = match src_backend.as_backend().copy_file(&src_str, &dst_str, opts) {
@@ -157,6 +180,35 @@ fn copy_with_backends(
             }
         };
         
+        if let Some(algorithm) = checksum_algorithm {
+            if opts.verbose {
+                println!("Verifying checksum using {:?}...", algorithm);
+            }
+            
+            let src_checksum = src_backend.as_backend().checksum(&src_str, algorithm)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Failed to compute source checksum: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })?;
+            
+            let dst_checksum = dst_backend.as_backend().checksum(&dst_str, algorithm)
+                .map_err(|e| CopyError::IoError {
+                    message: format!("Failed to compute destination checksum: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                })?;
+            
+            if src_checksum != dst_checksum {
+                return Err(CopyError::IoError {
+                    message: format!("Checksum mismatch: expected {}, got {}", src_checksum, dst_checksum),
+                    error: io::Error::new(io::ErrorKind::InvalidData, "Checksum verification failed"),
+                });
+            }
+            
+            if opts.verbose {
+                println!("✓ Checksum verified: {}", src_checksum);
+            }
+        }
+        
         let mut stats = if opts.verbose || opts.progress {
             CopyStats::new()
         } else {
@@ -168,6 +220,77 @@ fn copy_with_backends(
         }
         Ok(stats)
     }
+}
+
+fn verify_directory_checksums(
+    src_backend: &dyn Backend,
+    dst_backend: &dyn Backend,
+    src: &str,
+    dst: &str,
+    algorithm: crate::backend::traits::ChecksumAlgorithm,
+    verbose: bool,
+) -> Result<(), CopyError> {
+    use crate::backend::traits::Backend;
+    
+    let src_files = src_backend.list(src)
+        .map_err(|e| CopyError::IoError {
+            message: format!("Failed to list source directory: {}", e),
+            error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+        })?;
+    
+    let mut failed = Vec::new();
+    
+    for src_file in src_files {
+        if src_file.is_dir {
+            continue;
+        }
+        
+        let rel_path = src_file.path.strip_prefix(src)
+            .unwrap_or(&src_file.path)
+            .trim_start_matches('/');
+        
+        let dst_path = if dst.ends_with('/') {
+            format!("{}{}", dst, rel_path)
+        } else {
+            format!("{}/{}", dst, rel_path)
+        };
+        
+        match (src_backend.checksum(&src_file.path, algorithm),
+               dst_backend.checksum(&dst_path, algorithm)) {
+            (Ok(src_hash), Ok(dst_hash)) if src_hash == dst_hash => {
+                if verbose {
+                    println!("✓ {}: {}", rel_path, src_hash);
+                }
+            }
+            (Ok(src_hash), Ok(dst_hash)) => {
+                failed.push((rel_path.to_string(), src_hash, dst_hash));
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                return Err(CopyError::IoError {
+                    message: format!("Checksum computation failed: {}", e),
+                    error: io::Error::new(io::ErrorKind::Other, e.to_string()),
+                });
+            }
+        }
+    }
+    
+    if !failed.is_empty() {
+        eprintln!("Checksum verification failed for {} files:", failed.len());
+            let failed_count = failed.len();
+            for (path, expected, actual) in &failed {
+                eprintln!("  {}: expected {}, got {}", path, expected, actual);
+            }
+            return Err(CopyError::IoError {
+                message: format!("Checksum verification failed for {} files", failed_count),
+                error: io::Error::new(io::ErrorKind::InvalidData, "Checksum mismatch"),
+            });
+    }
+    
+    if verbose {
+        println!("✓ All files verified successfully");
+    }
+    
+    Ok(())
 }
 
 fn copy_legacy(

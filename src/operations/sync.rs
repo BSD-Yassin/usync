@@ -42,6 +42,13 @@ impl SyncOperation {
     }
 
     fn sync_one_way(&self, src_path: &str, dst_path: &str) -> Result<SyncStats, BackendError> {
+        if self.options.dry_run {
+            if self.options.verbose {
+                println!("[DRY RUN] Would sync: {} -> {}", src_path, dst_path);
+            }
+            return Ok(SyncStats::default());
+        }
+
         let src_files = self.src_backend.list(src_path)?;
         let dst_files = self.dst_backend.list(dst_path).unwrap_or_default();
 
@@ -118,6 +125,13 @@ impl SyncOperation {
     }
 
     fn sync_copy_only(&self, src_path: &str, dst_path: &str) -> Result<SyncStats, BackendError> {
+        if self.options.dry_run {
+            if self.options.verbose {
+                println!("[DRY RUN] Would copy-only sync: {} -> {}", src_path, dst_path);
+            }
+            return Ok(SyncStats::default());
+        }
+
         let src_files = self.src_backend.list(src_path)?;
 
         let mut stats = SyncStats::default();
