@@ -124,6 +124,37 @@ pub fn copy_with_options(
     }
 }
 
+pub fn copy_with_options_and_filters(
+    src: &ProtocolPath,
+    dst: &ProtocolPath,
+    verbose: bool,
+    ssh_opts: &[String],
+    progress: bool,
+    use_ram: bool,
+    checksum_algorithm: Option<crate::backend::traits::ChecksumAlgorithm>,
+    dry_run: bool,
+    filters: Option<std::sync::Arc<dyn crate::filters::Filter>>,
+) -> Result<CopyStats, CopyError> {
+    let opts = CopyOptions {
+        verbose,
+        progress,
+        use_ram,
+        recursive: true,
+        ssh_opts: ssh_opts.to_vec(),
+        dry_run,
+        filters,
+    };
+
+    match (create_backend(src), create_backend(dst)) {
+        (Ok(src_backend), Ok(dst_backend)) => {
+            copy_with_backends(src, dst, &src_backend, &dst_backend, &opts, checksum_algorithm)
+        }
+        _ => {
+            copy_legacy(src, dst, verbose, ssh_opts, progress, use_ram)
+        }
+    }
+}
+
 fn copy_with_backends(
     src: &ProtocolPath,
     dst: &ProtocolPath,

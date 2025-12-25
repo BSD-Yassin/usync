@@ -9,13 +9,13 @@ mod utils;
 
 use clap::Parser;
 
-use copy;
+use copy as copy_module;
 use protocol::parse_path;
 use operations::sync::SyncStats;
 use std::fs;
 
 enum SyncResult {
-    Copy(copy::CopyStats),
+    Copy(copy_module::CopyStats),
     Sync(SyncStats),
 }
 
@@ -295,8 +295,8 @@ fn main() {
         }
     }
 
-    let result: Result<SyncResult, copy::CopyError> = if args.sync {
-        copy::sync_with_options(
+    let result: Result<SyncResult, copy_module::CopyError> = if args.sync {
+        copy_module::sync_with_options(
             &src_path,
             &dst_path,
             verbose,
@@ -307,7 +307,7 @@ fn main() {
             dry_run,
         ).map(|stats| SyncResult::Sync(stats))
     } else {
-        copy::copy_with_options_and_filters(
+        copy_module::copy_with_options_and_filters(
             &src_path,
             &dst_path,
             verbose,

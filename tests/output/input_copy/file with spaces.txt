@@ -1,1 +1,1 @@
-special content
+file with spaces content
