@@ -31,7 +31,7 @@ impl LocalPath {
         &self.path
     }
 
-    pub fn to_string_lossy(&self) -> std::borrow::Cow<str> {
+    pub fn to_string_lossy(&self) -> std::borrow::Cow<'_, str> {
         self.path.to_string_lossy()
     }
 

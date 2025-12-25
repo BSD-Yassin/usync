@@ -99,9 +99,12 @@ jobs:
       if: runner.os == 'Linux' && matrix.cross == true
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-${{ matrix.target }} qemu-user-static binfmt-support
+        sudo apt-get install -y qemu-user-static binfmt-support
         case "${{ matrix.target }}" in
           *-gnueabihf)
+            sudo apt-get install -y gcc-arm-linux-gnueabihf
+            ;;
+          arm-unknown-linux-gnueabihf)
             sudo apt-get install -y gcc-arm-linux-gnueabihf
             ;;
           aarch64-*)
@@ -114,9 +117,8 @@ jobs:
     
     - name: Install cross (for easier cross-compilation)
       if: matrix.cross == true
-      uses: cargo-cross/cross-action@v1
-      with:
-        platforms: ${{ matrix.target }}
+      run: |
+        cargo install cross --git https://github.com/cross-rs/cross
     
     - name: Cache Cargo dependencies
       uses: actions/cache@v3
