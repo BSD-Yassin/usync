@@ -1,0 +1,291 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Semver tags (e.g., v1.2.3)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1.2.3)'
+        required: true
+        type: string
+      channel:
+        description: 'Build channel'
+        required: true
+        type: choice
+        options:
+          - stable
+          - nightly
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            binary_name: usync
+            toolchain: stable
+          - os: macos-latest
+            arch: aarch64
+            target: aarch64-apple-darwin
+            binary_name: usync
+            toolchain: stable
+          - os: ubuntu-latest
+            arch: i686
+            target: i686-unknown-linux-gnu
+            binary_name: usync
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            binary_name: usync
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: armv7
+            target: armv7-unknown-linux-gnueabihf
+            binary_name: usync
+            toolchain: stable
+            cross: true
+          - os: ubuntu-latest
+            arch: arm
+            target: arm-unknown-linux-gnueabihf
+            binary_name: usync
+            toolchain: stable
+            cross: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine version and channel
+      id: version_info
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          CHANNEL="${{ github.event.inputs.channel }}"
+        else
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          VERSION=$(echo "$TAG_NAME" | sed 's/^v//')
+          if echo "$TAG_NAME" | grep -qE "nightly|alpha|beta|rc"; then
+            CHANNEL="nightly"
+          else
+            CHANNEL="stable"
+          fi
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+        echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+        echo "Channel: $CHANNEL"
+
+    - name: Update Cargo.toml version
+      run: |
+        VERSION="${{ steps.version_info.outputs.version }}"
+        if [[ "$OSTYPE" == "darwin"* ]] || [[ "$RUNNER_OS" == "macOS" ]]; then
+          sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        else
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        fi
+        echo "Updated Cargo.toml to version $VERSION"
+        grep "^version" Cargo.toml
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ matrix.toolchain }}
+        targets: ${{ matrix.target }}
+
+    - name: Install cross-compilation dependencies (Linux)
+      if: runner.os == 'Linux' && matrix.cross == true
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-user-static binfmt-support
+        case "${{ matrix.target }}" in
+          *-gnueabihf)
+            sudo apt-get install -y gcc-arm-linux-gnueabihf
+            ;;
+          arm-unknown-linux-gnueabihf)
+            sudo apt-get install -y gcc-arm-linux-gnueabihf
+            ;;
+          aarch64-*)
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            ;;
+          i686-*)
+            sudo apt-get install -y gcc-multilib
+            ;;
+        esac
+
+    - name: Install cross (for cross-compilation)
+      if: matrix.cross == true
+      run: |
+        cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build release binary
+      run: |
+        if [ "${{ matrix.cross }}" = "true" ]; then
+          if command -v cross &> /dev/null; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        else
+          cargo build --release --target ${{ matrix.target }}
+        fi
+
+    - name: Find binary
+      id: find_binary
+      run: |
+        BINARY_PATH=""
+        if [ -f "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" ]; then
+          BINARY_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+        elif [ -f "target/release/${{ matrix.binary_name }}" ]; then
+          BINARY_PATH="target/release/${{ matrix.binary_name }}"
+        else
+          echo "Binary not found!"
+          ls -la target/${{ matrix.target }}/release/ || true
+          ls -la target/release/ || true
+          exit 1
+        fi
+        
+        echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+        echo "Found binary at: $BINARY_PATH"
+
+    - name: Create release archive
+      id: create_archive
+      run: |
+        VERSION="${{ steps.version_info.outputs.version }}"
+        CHANNEL="${{ steps.version_info.outputs.channel }}"
+        ARCHIVE_NAME="usync-${VERSION}-${CHANNEL}-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
+        
+        mkdir -p release
+        cp "${{ steps.find_binary.outputs.binary_path }}" release/usync
+        chmod +x release/usync
+        
+        tar -czf "$ARCHIVE_NAME" -C release usync
+        echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+        echo "Created archive: $ARCHIVE_NAME"
+
+    - name: Generate checksums
+      run: |
+        ARCHIVE_NAME="${{ steps.create_archive.outputs.archive_name }}"
+        
+        if command -v sha256sum &> /dev/null; then
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+        elif command -v shasum &> /dev/null; then
+          shasum -a 256 "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+        else
+          echo "No checksum tool found!"
+          exit 1
+        fi
+        
+        echo "Generated checksum: ${ARCHIVE_NAME}.sha256"
+        cat "${ARCHIVE_NAME}.sha256"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: usync-${{ matrix.os }}-${{ matrix.arch }}
+        path: |
+          ${{ steps.create_archive.outputs.archive_name }}
+          ${{ steps.create_archive.outputs.archive_name }}.sha256
+        retention-days: 90
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine version and channel
+      id: version_info
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          CHANNEL="${{ github.event.inputs.channel }}"
+        else
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          VERSION=$(echo "$TAG_NAME" | sed 's/^v//')
+          if echo "$TAG_NAME" | grep -qE "nightly|alpha|beta|rc"; then
+            CHANNEL="nightly"
+          else
+            CHANNEL="stable"
+          fi
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+        echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find artifacts -name "*.tar.gz" -exec cp {} release-assets/ \;
+        find artifacts -name "*.sha256" -exec cp {} release-assets/ \;
+        
+        echo "Release assets:"
+        ls -lh release-assets/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version_info.outputs.tag }}
+        name: Release ${{ steps.version_info.outputs.tag }} (${{ steps.version_info.outputs.channel }})
+        body: |
+          ## Release ${{ steps.version_info.outputs.version }} (${{ steps.version_info.outputs.channel }})
+          
+          ### Downloads
+          
+          **Channel:** ${{ steps.version_info.outputs.channel }}
+          
+          **Checksums:** All archives include SHA256 checksum files.
+          
+          ### Installation
+          
+          ```bash
+          # Extract and install
+          tar -xzf usync-*.tar.gz
+          sudo mv usync /usr/local/bin/
+          ```
+          
+          ### Verify
+          
+          ```bash
+          # Verify checksum
+          sha256sum -c usync-*.tar.gz.sha256
+          ```
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ steps.version_info.outputs.channel == 'nightly' }}
+
