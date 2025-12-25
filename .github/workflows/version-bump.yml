@@ -1,0 +1,162 @@
+name: Semantic Versioning
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+      - '.github/workflows/version-bump.yml'
+
+jobs:
+  version-bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Get latest tag
+      id: get_tag
+      run: |
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "Latest tag: $LATEST_TAG"
+    
+    - name: Analyze commits and determine version bump
+      id: version_bump
+      run: |
+        LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+        if [ "$LATEST_TAG" = "v0.0.0" ]; then
+          # No tags exist, get all commits
+          COMMITS=$(git log --pretty=format:"%s" --no-merges)
+        else
+          # Get commits since last tag
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s" --no-merges)
+        fi
+        
+        echo "Commits since last tag:"
+        echo "$COMMITS"
+        
+        # Determine bump type
+        BUMP_TYPE="patch"
+        HAS_BREAKING=false
+        HAS_FEAT=false
+        
+        while IFS= read -r commit; do
+          # Check for breaking changes
+          if echo "$commit" | grep -qE "BREAKING CHANGE:|!:"; then
+            HAS_BREAKING=true
+          fi
+          # Check for features
+          if echo "$commit" | grep -qE "^feat\(|^feat:"; then
+            HAS_FEAT=true
+          fi
+        done <<< "$COMMITS"
+        
+        if [ "$HAS_BREAKING" = "true" ]; then
+          BUMP_TYPE="major"
+        elif [ "$HAS_FEAT" = "true" ]; then
+          BUMP_TYPE="minor"
+        fi
+        
+        echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+        echo "Bump type: $BUMP_TYPE"
+    
+    - name: Calculate new version
+      id: new_version
+      run: |
+        LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+        BUMP_TYPE="${{ steps.version_bump.outputs.bump_type }}"
+        
+        # Remove 'v' prefix if present
+        VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+        
+        # Parse version components
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+        
+        # Bump version
+        case "$BUMP_TYPE" in
+          major)
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+            ;;
+          minor)
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            ;;
+          patch)
+            PATCH=$((PATCH + 1))
+            ;;
+        esac
+        
+        NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        NEW_TAG="v${NEW_VERSION}"
+        
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+        echo "New version: $NEW_VERSION"
+        echo "New tag: $NEW_TAG"
+    
+    - name: Check if version bump is needed
+      id: check_bump
+      run: |
+        LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+        NEW_TAG="${{ steps.new_version.outputs.new_tag }}"
+        
+        if [ "$LATEST_TAG" = "$NEW_TAG" ]; then
+          echo "bump_needed=false" >> $GITHUB_OUTPUT
+          echo "No version bump needed (no relevant commits)"
+        else
+          echo "bump_needed=true" >> $GITHUB_OUTPUT
+          echo "Version bump needed: $LATEST_TAG -> $NEW_TAG"
+        fi
+    
+    - name: Update Cargo.toml version
+      if: steps.check_bump.outputs.bump_needed == 'true'
+      run: |
+        NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+        
+        # Update version in Cargo.toml
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+          sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+        else
+          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+        fi
+        
+        echo "Updated Cargo.toml version to $NEW_VERSION"
+        cat Cargo.toml | grep "^version"
+    
+    - name: Create version bump commit
+      if: steps.check_bump.outputs.bump_needed == 'true'
+      run: |
+        NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+        NEW_TAG="${{ steps.new_version.outputs.new_tag }}"
+        
+        git add Cargo.toml
+        git commit -m "chore: Bump version to $NEW_VERSION" || exit 0
+        git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
+        
+        echo "Created commit and tag $NEW_TAG"
+    
+    - name: Push changes
+      if: steps.check_bump.outputs.bump_needed == 'true'
+      run: |
+        git push origin main
+        git push origin "${{ steps.new_version.outputs.new_tag }}"
+        echo "Pushed version bump and tag"
+
+
