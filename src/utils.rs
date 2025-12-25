@@ -130,7 +130,15 @@ pub fn copy_file_range_macos(src: &Path, dst: &Path) -> io::Result<u64> {
         );
 
         if result == 0 {
-            Ok(file_size)
+            if let Ok(dst_metadata) = fs::metadata(dst) {
+                if dst_metadata.len() == file_size && file_size > 0 {
+                    Ok(file_size)
+                } else {
+                    copy_file_buffered(src, dst)
+                }
+            } else {
+                copy_file_buffered(src, dst)
+            }
         } else {
             copy_file_buffered(src, dst)
         }
