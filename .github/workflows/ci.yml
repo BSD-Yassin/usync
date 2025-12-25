@@ -146,7 +146,7 @@ jobs:
     
     - name: Run unit tests (native)
       if: matrix.cross != true
-      run: cargo test --lib --target ${{ matrix.target }} --release
+      run: cargo test --target ${{ matrix.target }} --release
     
     - name: Run unit tests (cross-compiled)
       if: matrix.cross == true
