@@ -100,6 +100,7 @@ pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
 
 #[cfg(not(target_os = "linux"))]
 /// Fallback for non-Linux systems
+#[allow(dead_code)]
 pub fn copy_file_sendfile(src: &Path, dst: &Path) -> io::Result<u64> {
     copy_file_buffered(src, dst)
 }
